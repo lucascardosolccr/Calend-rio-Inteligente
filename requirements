@@ -4,4 +4,3 @@ plotly==5.22.0
 holidays==0.51
 ortools==9.10.4067
 numpy==1.26.4
-
