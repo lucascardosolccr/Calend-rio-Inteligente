@@ -1,4 +1,4 @@
-plotly>=5.15.0
-holidays>=0.40
-ortools>=9.8.0
-pandas>=2.0.0
+pandas
+plotly
+holidays
+ortools
