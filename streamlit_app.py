@@ -8,7 +8,7 @@ import pandas as pd
 # 1. CONFIGURAÇÃO DA PÁGINA & CONSTANTES VISUAIS (UI/UX BRANDING)
 # =============================================================================
 st.set_page_config(
-    page_title="Scheduler Engine PRO v3",
+    page_title="Scheduler Engine PRO v4",
     page_icon="📅",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -43,7 +43,6 @@ st.markdown("""
         border-radius: 8px;
         margin-bottom: 15px;
     }
-    /* Grid customizado do calendário visual */
     .calendar-grid {
         display: block;
         margin-bottom: 20px;
@@ -129,7 +128,6 @@ class BrazilHolidaysPure:
             sexta_santa: "Sexta-feira Santa",
             corpus_christi: "Corpus Christi"
         }
-        # Injeta os feriados estaduais/municipais ou impeditivos customizados
         base_holidays.update(self.custom_holidays)
         return base_holidays
 
@@ -174,8 +172,19 @@ class CalendarManager:
             "weekday": current_date.weekday()
         }
 
+    def contar_dias_uteis_entre(self, start_idx: int, end_idx: int, config: Dict[str, bool], manual_exclusions: List[datetime.date]) -> int:
+        """Calcula de forma exata quantos dias úteis existem em um intervalo numérico."""
+        if start_idx >= end_idx:
+            return 0
+        dias_uteis = 0
+        for idx in range(start_idx + 1, end_idx + 1):
+            props = self.get_day_properties(idx, config)
+            if not props["is_blocked"] and props["date"] not in manual_exclusions:
+                dias_uteis += 1
+        return dias_uteis
+
 # =============================================================================
-# 5. MOTOR DE OTIMIZAÇÃO POR RESOLUÇÃO RECURSIVA AVANÇADA
+# 5. MOTOR DE OTIMIZAÇÃO POR RESOLUÇÃO RECURSIVA AVANÇADA (V4)
 # =============================================================================
 class PurePythonScheduleEngine:
     def __init__(self, cal_mgr: CalendarManager, cal_config: Dict[str, bool]):
@@ -219,6 +228,19 @@ class PurePythonScheduleEngine:
                     min_gap = r.params.get("min_gap", 0)
                     if alocacao[t_b] < alocacao[t_a] + min_gap:
                         return False
+                        
+            elif r.type == "working_day_offset":
+                t_base = r.params["task_base"]
+                t_target = r.params["task_target"]
+                if t_base in alocacao and t_target in alocacao:
+                    idx_base = alocacao[t_base]
+                    idx_target = alocacao[t_target]
+                    offset_esperado = r.params["offset"]
+                    
+                    # Calcula a distância real em dias úteis regulamentares
+                    dias_uteis_reais = self.cal_mgr.contar_dias_uteis_entre(idx_base, idx_target, self.cal_config, self.manual_exclusions)
+                    if dias_uteis_reais != offset_esperado:
+                        return False
         return True
 
     def _avaliar_custo(self, alocacao: Dict[str, int]) -> int:
@@ -234,6 +256,14 @@ class PurePythonScheduleEngine:
         melhor_custo = float('inf')
         task_ids = [t.id for t in self.tasks]
         
+        # Ajusta a janela de lookahead dinamicamente para comportar grandes offsets (ex: 30 dias úteis ~ 45 normais)
+        max_offset_detectado = 60
+        for r in self.restrictions:
+            if r.type == "working_day_offset":
+                max_offset_detectado = max(max_offset_detectado, r.params["offset"] * 2)
+
+        horizonte_busca = min(max_offset_detectado + 60, self.cal_mgr.total_days)
+
         def backtrack(task_index: int, alocacao_atual: Dict[str, int]):
             nonlocal solucao_otima, melhor_custo
             
@@ -249,7 +279,7 @@ class PurePythonScheduleEngine:
 
             t_id = task_ids[task_index]
             
-            for idx in range(min(90, self.cal_mgr.total_days)):
+            for idx in range(horizonte_busca):
                 alocacao_atual[t_id] = idx
                 if self._avaliar_custo(alocacao_atual) < melhor_custo:
                     backtrack(task_index + 1, alocacao_atual)
@@ -264,7 +294,7 @@ class PurePythonScheduleEngine:
                 alternatives.append({
                     "task_id": t_id,
                     "score": max(0, 100 - melhor_custo),
-                    "justification": "Conformidade e segurança regulamentar validadas."
+                    "justification": "Alocação regulamentar ideal estruturada sob regras estritas."
                 })
             return "SUCCESS", results, alternatives
             
@@ -275,13 +305,12 @@ class PurePythonScheduleEngine:
 # =============================================================================
 def main():
     st.markdown('<div class="main-title">📅 Engine de Agendamento Otimizado</div>', unsafe_allow_html=True)
-    st.markdown('<div class="subtitle">Planejamento Estratégico com Calendário Visual Dinâmico e Customização de Feriados</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subtitle">Planejamento Estratégico com Deslocamento em Dias Úteis e Matriz Analítica</div>', unsafe_allow_html=True)
     
-    # Gerenciamento de Feriados Estaduais / Customizados via Session State
     if "custom_holidays" not in st.session_state:
         st.session_state.custom_holidays = {}
 
-    # Barra Lateral - Controles Gerais
+    # Barra Lateral
     st.sidebar.header("⚙️ Configurações Centrais")
     ano_corrente = st.sidebar.number_input("Ano do Exercício", min_value=2024, max_value=2030, value=2026)
     
@@ -290,7 +319,6 @@ def main():
         "block_holidays": st.sidebar.checkbox("Bloquear Feriados Ativos", value=True)
     }
 
-    # Painel para Adicionar Feriados Customizados (Estaduais / Municipais)
     st.sidebar.subheader("🏛️ Cadastrar Feriado Estadual / Impeditivo")
     with st.sidebar.container():
         f_name = st.text_input("Nome do Feriado/Impeditivo", placeholder="Ex: Feriado Distrital")
@@ -301,11 +329,6 @@ def main():
                 st.sidebar.success(f"'{f_name}' registrado!")
                 st.rerun()
 
-    if st.session_state.custom_holidays:
-        st.sidebar.markdown("**Feriados Estaduais Ativos:**")
-        for d, name in list(st.session_state.custom_holidays.items()):
-            st.sidebar.caption(f"• {d.strftime('%d/%m')}: {name}")
-
     st.sidebar.subheader("🚫 Indisponibilidades Manuais")
     manual_dates = st.sidebar.date_input("Adicionar datas avulsas bloqueadas", value=[])
     if isinstance(manual_dates, datetime.date):
@@ -313,23 +336,21 @@ def main():
     elif isinstance(manual_dates, tuple):
         manual_dates = list(manual_dates)
 
-    # Instancia o gerenciador unificado de calendário
     cal_mgr = CalendarManager(year=ano_corrente, custom_holidays=st.session_state.custom_holidays)
 
-    # Inicialização estável do escopo de tarefas padrão
+    # Inicialização estável do estado
     if "tasks" not in st.session_state:
         st.session_state.tasks = [
-            Task(id="T1", name="Reunião de Alinhamento e Metas"),
-            Task(id="T2", name="Consolidação e Integração CILAES")
+            Task(id="T1", name="Homologação e Abertura do Processo"),
+            Task(id="T2", name="Análise de Metas e Dashboard CILAES")
         ]
     if "restrictions" not in st.session_state:
         st.session_state.restrictions = [
-            Restriction(type="dependency", params={"task_a": "T1", "task_b": "T2", "min_gap": 2})
+            Restriction(type="working_day_offset", params={"task_base": "T1", "task_target": "T2", "offset": 10})
         ]
 
-    # Abas Principais de Operação
     tab_compromissos, tab_visualizacao, tab_calendario_visual = st.tabs([
-        "📋 1. Escopo & Regras", 
+        "📋 1. Escopo & Regras Customizadas", 
         "📊 2. Painel Analítico & Exportação", 
         "📅 3. Calendário Visual Anual"
     ])
@@ -341,8 +362,8 @@ def main():
             st.subheader("📌 Cadastro de Atividades")
             with st.container():
                 new_id = st.text_input("Código de Identificação (Único)", value=f"T{len(st.session_state.tasks)+1}")
-                new_name = st.text_input("Nome Descritivo do Compromisso", placeholder="Ex: Auditoria de Processos")
-                if st.button("✨ Adicionar Atividade", use_container_width=True):
+                new_name = st.text_input("Nome Descritivo do Compromisso", placeholder="Ex: Auditoria Interna")
+                if st.button("✨ Adicionar Atividade à Matriz", use_container_width=True):
                     if new_name and not any(t.id == new_id for t in st.session_state.tasks):
                         st.session_state.tasks.append(Task(id=new_id, name=new_name))
                         st.toast(f"Compromisso {new_id} acoplado!")
@@ -353,10 +374,31 @@ def main():
             st.dataframe(df_tasks, use_container_width=True, hide_index=True)
 
         with col_rest:
-            st.subheader("⛓️ Restrições Logísticas")
-            rest_type = st.selectbox("Selecione o Modelo de Regra", ["Prazo Limite (Deadline)", "Dependência Sequencial"])
+            st.subheader("⛓️ Restrições Logísticas Avançadas")
+            rest_type = st.selectbox("Selecione o Modelo de Regra", [
+                "Deslocamento por Dias Úteis Exatos", 
+                "Prazo Limite (Deadline)", 
+                "Dependência Sequencial Simples"
+            ])
             
-            if rest_type == "Prazo Limite (Deadline)":
+            if rest_type == "Deslocamento por Dias Úteis Exatos":
+                st.caption("Garante que uma tarefa ocorra exatamente X dias úteis após outra tarefa base.")
+                t_base = st.selectbox("Selecione a Atividade Base", [t.id for t in st.session_state.tasks], key="base_off")
+                t_target = st.selectbox("Selecione a Atividade Destino", [t.id for t in st.session_state.tasks], key="target_off")
+                num_dias_uteis = st.number_input("Número de Dias Úteis de Intervalo", min_value=1, max_value=60, value=10)
+                
+                if st.button("Vincular Regra de Dias Úteis", use_container_width=True):
+                    if t_base != t_target:
+                        st.session_state.restrictions.append(Restriction(
+                            type="working_day_offset", 
+                            params={"task_base": t_base, "task_target": t_target, "offset": num_dias_uteis}
+                        ))
+                        st.toast("Regra de Dias Úteis amarrada com sucesso!")
+                        st.rerun()
+                    else:
+                        st.error("A atividade de destino não pode ser igual à base.")
+
+            elif rest_type == "Prazo Limite (Deadline)":
                 t_id = st.selectbox("Escolha o Alvo", [t.id for t in st.session_state.tasks])
                 choice = st.radio("Critério", ["Deve ocorrer APÓS", "Deve ocorrer ANTES"])
                 d_val = st.date_input("Data de Referência", datetime.date(ano_corrente, 1, 10))
@@ -365,16 +407,17 @@ def main():
                     st.session_state.restrictions.append(Restriction(type="deadline", params={"task_id": t_id, param_key: d_val}))
                     st.rerun()
                     
-            elif rest_type == "Dependência Sequencial":
+            elif rest_type == "Dependência Sequencial Simples":
                 t_a = st.selectbox("Antecessora (A)", [t.id for t in st.session_state.tasks], key="dep_a")
                 t_b = st.selectbox("Sucessora (B)", [t.id for t in st.session_state.tasks], key="dep_b")
-                min_g = st.number_input("Intervalo Mínimo (Dias)", min_value=0, value=2)
+                min_g = st.number_input("Intervalo Mínimo Corrido (Dias)", min_value=0, value=2)
                 if st.button("Vincular Cadeia Sequencial", use_container_width=True):
                     if t_a != t_b:
                         st.session_state.restrictions.append(Restriction(type="dependency", params={"task_a": t_a, "task_b": t_b, "min_gap": min_g}))
                         st.rerun()
 
             st.markdown("---")
+            st.markdown("**Regras Ativas na Engine:**")
             for idx, r in enumerate(st.session_state.restrictions):
                 st.caption(f"• **Regra {idx+1}:** {r.type.upper()} ➔ {r.params}")
 
@@ -387,7 +430,7 @@ def main():
 
     with tab_visualizacao:
         if status == "SUCCESS":
-            st.success("🎯 Agenda estruturada com sucesso!")
+            st.success("🎯 Agenda estruturada com sucesso! Todas as condicionais e prazos foram resolvidos.")
             
             col_m1, col_m2 = st.columns(2)
             for i, (t_id, date_val) in enumerate(sol_dates.items()):
@@ -399,10 +442,11 @@ def main():
                         <span style="color:#2563EB; font-weight:bold; font-size:11px;">CÓDIGO: {t_id}</span>
                         <h4 style="margin:2px 0;">📌 {t_obj.name}</h4>
                         <h2 style="color:#1E3A8A; margin:5px 0;">{date_val.strftime('%d/%m/%Y')}</h2>
+                        <span style="font-size:11px; color:#6B7280;">Dia da semana: {["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"][date_val.weekday()]}</span>
                     </div>
                     """, unsafe_allow_html=True)
 
-            st.markdown("### 📊 Tabela Geral de Atividades")
+            st.markdown("### 📊 Tabela Geral Consolidadora")
             cronograma_data = [
                 {
                     "Código ID": t_id,
@@ -416,32 +460,29 @@ def main():
             
             csv_buffer = df_final.to_csv(index=False).encode('utf-8')
             st.download_button(
-                label="📥 Baixar Planilha Consolidadora (.CSV)",
+                label="📥 Baixar Planilha Otimizada (.CSV)",
                 data=csv_buffer,
-                file_name=f"cronograma_{ano_corrente}.csv",
+                file_name=f"cronograma_dias_uteis_{ano_corrente}.csv",
                 mime="text/csv",
                 use_container_width=True
             )
         else:
-            st.error("❌ Bloqueio Logístico: Inviabilidade matemática nas regras vigentes.")
+            st.error("❌ Bloqueio Logístico: Conflito estrutural de regras. O motor determinou ser logicamente impossível alocar os compromissos com os prazos limites ou dias úteis definidos.")
 
     with tab_calendario_visual:
-        st.subheader("📅 Mapa Visual de Disponibilidade e Alocações")
-        st.caption("Visão matricial analítica do ano corrente. Monitore bloqueios, feriados nacionais/estaduais e tarefas alocadas.")
+        st.subheader("📅 Mapa Analítico de Disponibilidade")
         
-        # Legenda Visual Explicativa
         st.markdown("""
         <div style="display: flex; gap: 15px; margin-bottom: 20px; font-size: 13px;">
-            <div><span style="background-color: #F9FAFB; padding: 2px 10px; border: 1px solid #D1D5DB; border-radius:3px;"></span> Dia Operacional Disponível</div>
-            <div><span style="background-color: #DBEAFE; padding: 2px 10px; border: 1px solid #2563EB; border-radius:3px;"></span> <b>Atividade Alocada</b></div>
-            <div><span style="background-color: #FEE2E2; padding: 2px 10px; border: 1px solid #D1D5DB; border-radius:3px;"></span> Feriado (Nacional ou Customizado)</div>
-            <div><span style="background-color: #E5E7EB; padding: 2px 10px; border: 1px solid #D1D5DB; border-radius:3px;"></span> Fim de Semana / Bloqueio Manual</div>
+            <div><span style="background-color: #F9FAFB; padding: 2px 10px; border: 1px solid #D1D5DB; border-radius:3px;"></span> Dia Útil Livre</div>
+            <div><span style="background-color: #DBEAFE; padding: 2px 10px; border: 1px solid #2563EB; border-radius:3px;"></span> <b>Tarefa Alocada</b></div>
+            <div><span style="background-color: #FEE2E2; padding: 2px 10px; border: 1px solid #D1D5DB; border-radius:3px;"></span> Feriado Ativo</div>
+            <div><span style="background-color: #E5E7EB; padding: 2px 10px; border: 1px solid #D1D5DB; border-radius:3px;"></span> Bloqueio / Fim de Semana</div>
         </div>
         """, unsafe_allow_html=True)
 
-        # Renderização dos meses dinamicamente em colunas
         m_idx = 1
-        for row_m in range(4): # 4 linhas de 3 meses cada = 12 meses
+        for row_m in range(4):
             cols_meses = st.columns(3)
             for col_mes in cols_meses:
                 if m_idx <= 12:
@@ -449,7 +490,6 @@ def main():
                         nome_mes = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"][m_idx - 1]
                         st.markdown(f"##### **{nome_mes}**")
                         
-                        # Inicia a tabela HTML do mês
                         html_cal = '<div class="calendar-grid"><div class="calendar-row">'
                         for sem in ["D", "S", "T", "Q", "Q", "S", "S"]:
                             html_cal += f'<div class="calendar-cell day-header">{sem}</div>'
@@ -468,21 +508,17 @@ def main():
                                     idx_verif = cal_mgr.date_to_idx(d_verif)
                                     props = cal_mgr.get_day_properties(idx_verif, cal_config)
                                     
-                                    # Determina a classe CSS com base no status do dia
                                     cell_class = "day-normal"
                                     title_hover = props["name"]
                                     
                                     if d_verif in sol_dates.values():
                                         cell_class = "day-allocated"
-                                        # Identifica qual tarefa está aqui
                                         t_codes = [t_id for t_id, dt in sol_dates.items() if dt == d_verif]
                                         title_hover = f"Alocado: {', '.join(t_codes)}"
                                     elif props["is_holiday"]:
                                         cell_class = "day-holiday"
-                                        title_hover = props["name"]
                                     elif props["is_blocked"] or d_verif in manual_dates:
                                         cell_class = "day-blocked"
-                                        title_hover = "Bloqueado / Fim de Semana"
                                         
                                     html_cal += f'<div class="calendar-cell {cell_class}" title="{title_hover}">{day}</div>'
                             html_cal += '</div>'
