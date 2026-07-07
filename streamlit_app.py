@@ -1,29 +1,43 @@
+import sys
+import os
+import subprocess
 import datetime
 from typing import List, Dict, Any, Tuple
-import streamlit as st
-import pandas as pd
-
-# Importações com blocos Try/Except amigáveis para diagnosticar se a plataforma instalou
-try:
-    import plotly.express as px
-except ImportError:
-    st.error("🚨 Erro de Ambiente: O pacote 'plotly' não foi instalado pelo Streamlit Cloud. Verifique o arquivo requirements.txt.")
-    st.stop()
-
-try:
-    import holidays
-except ImportError:
-    st.error("🚨 Erro de Ambiente: O pacote 'holidays' não foi instalado. Verifique o seu arquivo de dependências.")
-    st.stop()
-
-try:
-    from ortools.sat.python import cp_model
-except ImportError:
-    st.error("🚨 Erro de Ambiente: O pacote 'ortools' (Google) não foi encontrado no servidor.")
-    st.stop()
 
 # =============================================================================
-# 1. CONFIGURAÇÃO DA PÁGINA & CONSTANTES DE UI
+# 1. BLINDAGEM AUTOMÁTICA DE AMBIENTE (ÚNICO ARQUIVO)
+# =============================================================================
+def auto_reparar_ambiente():
+    """Garante a instalação dos pacotes necessários direto no escopo do usuário."""
+    # Adiciona caminhos locais ao PATH para garantir visibilidade no Streamlit Cloud
+    user_site = os.path.expanduser('~/.local/lib/python' + '.'.join(sys.version.split('.')[:2]) + '/site-packages')
+    if user_site not in sys.path:
+        sys.path.insert(0, user_site)
+        
+    pacotes = {"plotly": "plotly>=5.15.0", "holidays": "holidays>=0.40", "ortools": "ortools>=9.8.0"}
+    
+    for modulo, comando_pip in pacotes.items():
+        try:
+            __import__(modulo)
+        except ImportError:
+            # Instalação silenciosa em tempo de execução usando privilégios permitidos (--user)
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--user", "--quiet", comando_pip],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+
+# Executa o mecanismo protetor antes de carregar as bibliotecas pesadas
+auto_reparar_ambiente()
+
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import holidays
+from ortools.sat.python import cp_model
+
+# =============================================================================
+# 2. CONFIGURAÇÃO DA INTERFACE & ESTILOS CSS
 # =============================================================================
 st.set_page_config(
     page_title="Scheduler Engine PRO",
@@ -46,7 +60,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =============================================================================
-# 2. MODELOS DE DADOS
+# 3. CLASSES DE DOMÍNIO (MODELOS DE DADOS)
 # =============================================================================
 class Task:
     def __init__(self, id: str, name: str):
@@ -59,7 +73,7 @@ class Restriction:
         self.params = params
 
 # =============================================================================
-# 3. GERENCIADOR DE CALENDÁRIO
+# 4. GERENCIADOR DE CALENDÁRIO & FERIADOS (DF / BRASIL)
 # =============================================================================
 class CalendarManager:
     def __init__(self, year: int, state: str = "DF"):
@@ -100,7 +114,7 @@ class CalendarManager:
         }
 
 # =============================================================================
-# 4. MOTOR DE OTIMIZAÇÃO (OR-TOOLS)
+# 5. MOTOR DE RESOLUÇÃO MATEMÁTICA (OR-TOOLS)
 # =============================================================================
 class ScheduleEngine:
     def __init__(self, cal_mgr: CalendarManager, cal_config: Dict[str, bool]):
@@ -170,17 +184,17 @@ class ScheduleEngine:
                 alternatives.append({
                     "task_id": t_id,
                     "score": 100 - int(self.solver.ObjectiveValue() if self.solver.HasObjective() else 0),
-                    "justification": "Respeita as restrições rígidas e evita janelas críticas bloqueadas."
+                    "justification": "Alocação regulamentar ideal que preserva restrições rígidas."
                 })
             return "SUCCESS", results, alternatives
         return "INFEASIBLE", {}, []
 
 # =============================================================================
-# 5. USER INTERFACE (STREAMLIT)
+# 6. ENTRADA DA INTERFACE GRÁFICA (MAIN)
 # =============================================================================
 def main():
     st.title("📅 Engine de Agendamento Inteligente e Otimização")
-    st.caption("Sistema Avançado para Alocação de Datas via Pesquisa Operacional")
+    st.caption("Solucionador Consolidado de Alta Disponibilidade")
     st.hr()
 
     st.sidebar.header("⚙️ Configurações do Calendário")
@@ -264,7 +278,8 @@ def main():
         status, sol_dates, alt_cards = engine.solve()
 
         if status == "SUCCESS":
-            st.success("🎉 Solução otimizada encontrada com sucesso!")
+            st.success("🎉 Solução estruturada encontrada com sucesso!")
+            
             col_m1, col_m2 = st.columns(2)
             for i, (t_id, date_val) in enumerate(sol_dates.items()):
                 target_col = col_m1 if i % 2 == 0 else col_m2
@@ -274,8 +289,8 @@ def main():
                     <div class="metric-card">
                         <h4>📌 {t_obj.name} ({t_id})</h4>
                         <h2>{date_val.strftime('%d/%m/%Y')}</h2>
-                        <p style="color:#6c757d; font-size:13px;"><b>Score:</b> {alt_cards[i]['score']}/100<br>
-                        <b>Justificativa:</b> {alt_cards[i]['justification']}</p>
+                        <p style="color:#6c757d; font-size:13px;"><b>Confiança Operacional:</b> {alt_cards[i]['score']}/100<br>
+                        <b>Mapeamento:</b> {alt_cards[i]['justification']}</p>
                     </div>
                     """, unsafe_allow_html=True)
 
@@ -285,7 +300,7 @@ def main():
             fig_timeline.update_yaxes(autorange="reversed")
             st.plotly_chart(fig_timeline, use_container_width=True)
         else:
-            st.error("❌ Conflito de Restrições. Modifique os prazos ou dependências para recalcular.")
+            st.error("❌ Conflito de Restrições rígidas. Altere parâmetros ou datas limite na aba de compromissos.")
 
 if __name__ == "__main__":
     main()
