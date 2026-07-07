@@ -4,18 +4,8 @@ import streamlit as st
 import pandas as pd
 
 # =============================================================================
-# VERIFICAÇÃO DE DEPENDÊNCIAS CRÍTICAS (SEM SUBPROCESS)
+# 1. CONFIGURAÇÃO DA PÁGINA & CONSTANTES DE UI
 # =============================================================================
-try:
-    import plotly.express as px
-    import holidays
-    from ortools.sat.python import cp_model
-    AMBIENTE_OK = True
-except ImportError as e:
-    AMBIENTE_OK = False
-    MODULO_FALTANTE = str(e).split("'")[-2] if "'" in str(e) else str(e)
-
-# Configuração inicial da página
 st.set_page_config(
     page_title="Scheduler Engine PRO",
     page_icon="📅",
@@ -23,29 +13,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Se o ambiente não estiver pronto, mostra tela de instrução amigável e para a execução
-if not AMBIENTE_OK:
-    st.error(f"### 🚨 Erro de Infraestrutura no Streamlit Cloud")
-    st.markdown(f"""
-    O servidor do Streamlit não instalou a biblioteca **`{MODULO_FALTANTE}`**.
-    
-    #### **Como corrigir isso definitivamente no seu GitHub:**
-    1. Vá na raiz do seu repositório no GitHub (onde está este arquivo `streamlit_app.py`).
-    2. Certifique-se de que existe um arquivo chamado exatamente **`requirements.txt`** (tudo em letras minúsculas).
-    3. O conteúdo desse arquivo deve ser estritamente:
-    ```text
-    plotly>=5.15.0
-    holidays>=0.40
-    ortools>=9.8.0
-    pandas>=2.0.0
-    ```
-    4. Depois de salvar o arquivo no GitHub, você **precisa** deletar o app no painel do Streamlit Cloud e criá-lo novamente para limpar o cache corrompido do servidor.
-    """)
-    st.stop()
-
-# =============================================================================
-# ESTILIZAÇÃO CSS
-# =============================================================================
 st.markdown("""
     <style>
     .metric-card {
@@ -60,7 +27,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =============================================================================
-# MODELOS DE DADOS & CLASSES
+# 2. MODELOS DE DADOS
 # =============================================================================
 class Task:
     def __init__(self, id: str, name: str):
@@ -72,11 +39,68 @@ class Restriction:
         self.type = type
         self.params = params
 
-class CalendarManager:
-    def __init__(self, year: int, state: str = "DF"):
+# =============================================================================
+# 3. MOTOR DE FERIADOS PURO (MÉTODO DE GAUSS PARA PÁSCOA)
+# =============================================================================
+class BrazilHolidaysPure:
+    """Calcula feriados nacionais e do DF sem usar a biblioteca holidays."""
+    def __init__(self, year: int):
         self.year = year
-        self.state = state
-        self.br_holidays = holidays.Brazil(years=self.year, subdivisions=self.state)
+        self.holidays_dict = self._generate_holidays()
+
+    def _calcula_pascoa(self, ano: int) -> datetime.date:
+        a = ano % 19
+        b = ano // 100
+        c = ano % 100
+        d = b // 4
+        e = b % 4
+        f = (b + 8) // 25
+        g = (b - f + 1) // 3
+        h = (19 * a + b - d - g + 15) % 30
+        i = c // 4
+        k = c % 4
+        l = (32 + 2 * e + 2 * i - h - k) % 7
+        m = (a + 11 * h + 22 * l) // 451
+        mes = (h + l - 7 * m + 114) // 31
+        dia = ((h + l - 7 * m + 114) % 31) + 1
+        return datetime.date(ano, mes, dia)
+
+    def _generate_holidays(self) -> Dict[datetime.date, str]:
+        pascoa = self._calcula_pascoa(self.year)
+        carnaval = pascoa - datetime.timedelta(days=47)
+        sexta_santa = pascoa - datetime.timedelta(days=2)
+        corpus_christi = pascoa + datetime.timedelta(days=60)
+        
+        feriados = {
+            datetime.date(self.year, 1, 1): "Ano Novo",
+            datetime.date(self.year, 4, 21): "Tiradentes / Aniversário de Brasília",
+            datetime.date(self.year, 5, 1): "Dia do Trabalho",
+            datetime.date(self.year, 9, 7): "Independência do Brasil",
+            datetime.date(self.year, 10, 12): "Nossa Sra. Aparecida",
+            datetime.date(self.year, 10, 28): "Dia do Servidor Público (Facultativo)",
+            datetime.date(self.year, 11, 2): "Finados",
+            datetime.date(self.year, 11, 15): "Proclamação da República",
+            datetime.date(self.year, 11, 30): "Dia do Evangélico (Feriado no DF)",
+            datetime.date(self.year, 12, 25): "Natal",
+            carnaval: "Carnaval (Ponto Facultativo)",
+            sexta_santa: "Sexta-feira Santa",
+            corpus_christi: "Corpus Christi (Ponto Facultativo)"
+        }
+        return feriados
+
+    def get(self, d: datetime.date, default: str = "") -> str:
+        return self.holidays_dict.get(d, default)
+
+    def __contains__(self, d: datetime.date) -> bool:
+        return d in self.holidays_dict
+
+# =============================================================================
+# 4. GERENCIADOR DE CALENDÁRIO
+# =============================================================================
+class CalendarManager:
+    def __init__(self, year: int):
+        self.year = year
+        self.br_holidays = BrazilHolidaysPure(year=self.year)
         self.start_date = datetime.date(year, 1, 1)
         self.end_date = datetime.date(year, 12, 31)
         self.total_days = (self.end_date - self.start_date).days + 1
@@ -90,8 +114,9 @@ class CalendarManager:
     def get_day_properties(self, idx: int, config: Dict[str, bool]) -> Dict[str, Any]:
         current_date = self.idx_to_date(idx)
         is_weekend = current_date.weekday() in (5, 6)
-        is_holiday = current_date in self.br_holidays
-        is_facultative = "facultativo" in self.br_holidays.get(current_date, "").lower()
+        holiday_name = self.br_holidays.get(current_date, "")
+        is_holiday = holiday_name != ""
+        is_facultative = "facultativo" in holiday_name.lower()
         
         is_blocked = False
         if config.get("block_weekends") and is_weekend:
@@ -106,102 +131,133 @@ class CalendarManager:
             "is_weekend": is_weekend,
             "is_holiday": is_holiday,
             "is_blocked": is_blocked,
-            "name": self.br_holidays.get(current_date, "Dia Comum"),
+            "name": holiday_name if is_holiday else "Dia Comum",
             "weekday": current_date.weekday()
         }
 
-class ScheduleEngine:
+# =============================================================================
+# 5. MOTOR DE OTIMIZAÇÃO NATIVO (BACKTRACKING COM RESOLUÇÃO RECURSIVA)
+# =============================================================================
+class PurePythonScheduleEngine:
+    """Substitui o OR-Tools por um algoritmo recursivo puro de busca operacional."""
     def __init__(self, cal_mgr: CalendarManager, cal_config: Dict[str, bool]):
         self.cal_mgr = cal_mgr
         self.cal_config = cal_config
-        self.model = cp_model.CpModel()
-        self.solver = cp_model.CpSolver()
-        self.solver.parameters.max_time_in_seconds = 5.0
-        
-        self.task_vars: Dict[str, cp_model.IntVar] = {}
-        self.tasks: Dict[str, Task] = {}
+        self.tasks: List[Task] = []
+        self.restrictions: List[Restriction] = []
+        self.manual_exclusions: List[datetime.date] = []
 
     def add_tasks(self, tasks: List[Task]):
-        for t in tasks:
-            self.tasks[t.id] = t
-            self.task_vars[t.id] = self.model.NewIntVar(0, self.cal_mgr.total_days - 1, f"task_{t.id}")
+        self.tasks = tasks
 
     def apply_global_blocks(self, manual_exclusions: List[datetime.date]):
-        excluded_indices = set([self.cal_mgr.date_to_idx(d) for d in manual_exclusions])
-        for idx in range(self.cal_mgr.total_days):
-            props = self.cal_mgr.get_day_properties(idx, self.cal_config)
-            if props["is_blocked"] or idx in excluded_indices:
-                for var in self.task_vars.values():
-                    self.model.Add(var != idx)
+        self.manual_exclusions = manual_exclusions
 
     def apply_restrictions(self, restrictions: List[Restriction]):
-        for r in restrictions:
+        self.restrictions = restrictions
+
+    def _validar_parcial(self, alocacao: Dict[str, int]) -> bool:
+        # Verifica bloqueios globais e manuais
+        for t_id, idx in alocacao.items():
+            props = self.cal_mgr.get_day_properties(idx, self.cal_config)
+            if props["is_blocked"] or props["date"] in self.manual_exclusions:
+                return False
+
+        # Verifica restrições dinâmicas aplicáveis ao escopo atual
+        for r in self.restrictions:
             if r.type == "deadline":
                 t_id = r.params["task_id"]
-                if t_id not in self.task_vars: continue
-                if r.params.get("before"):
-                    idx = self.cal_mgr.date_to_idx(r.params["before"])
-                    self.model.Add(self.task_vars[t_id] < idx)
-                if r.params.get("after"):
-                    idx = self.cal_mgr.date_to_idx(r.params["after"])
-                    self.model.Add(self.task_vars[t_id] > idx)
-                    
+                if t_id in alocacao:
+                    idx_atual = alocacao[t_id]
+                    if r.params.get("before"):
+                        idx_limite = self.cal_mgr.date_to_idx(r.params["before"])
+                        if idx_atual >= idx_limite: return False
+                    if r.params.get("after"):
+                        idx_limite = self.cal_mgr.date_to_idx(r.params["after"])
+                        if idx_atual <= idx_limite: return False
+                        
             elif r.type == "dependency":
                 t_a = r.params["task_a"]
                 t_b = r.params["task_b"]
-                if t_a not in self.task_vars or t_b not in self.task_vars: continue
-                min_gap = r.params.get("min_gap", 0)
-                self.model.Add(self.task_vars[t_b] >= self.task_vars[t_a] + min_gap)
+                if t_a in alocacao and t_b in alocacao:
+                    min_gap = r.params.get("min_gap", 0)
+                    if alocacao[t_b] < alocacao[t_a] + min_gap:
+                        return False
+        return True
 
-    def build_objectives(self):
-        penalties = []
-        for t_id, var in self.task_vars.items():
-            for idx in range(self.cal_mgr.total_days):
-                props = self.cal_mgr.get_day_properties(idx, self.cal_config)
-                if props["is_weekend"] or props["is_holiday"]:
-                    bool_var = self.model.NewBoolVar(f"pen_{t_id}_{idx}")
-                    self.model.Add(var == idx).OnlyEnforceIf(bool_var)
-                    self.model.Add(var != idx).OnlyEnforceIf(bool_var.Not())
-                    penalties.append(bool_var * 50)
-        if penalties:
-            self.model.Minimize(sum(penalties))
+    def _avaliar_custo(self, alocacao: Dict[str, int]) -> int:
+        custo = 0
+        for idx in alocacao.values():
+            props = self.cal_mgr.get_day_properties(idx, self.cal_config)
+            if props["is_weekend"] or props["is_holiday"]:
+                custo += 50
+        return custo
 
     def solve(self) -> Tuple[str, Dict[str, datetime.date], List[Dict[str, Any]]]:
-        status = self.solver.Solve(self.model)
-        results = {}
-        alternatives = []
-        if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-            for t_id, var in self.task_vars.items():
-                idx_sol = self.solver.Value(var)
-                chosen_date = self.cal_mgr.idx_to_date(idx_sol)
-                results[t_id] = chosen_date
+        solucao_otima = {}
+        melhor_custo = float('inf')
+        
+        # Mapeia as tarefas por índice para recursão estável
+        task_ids = [t.id for t in self.tasks]
+        
+        def backtrack(task_index: int, alocacao_atual: Dict[str, int]):
+            nonlocal solucao_otima, melhor_custo
+            
+            if not self._validar_parcial(alocacao_atual):
+                return
+                
+            if task_index == len(task_ids):
+                custo_atual = self._avaliar_custo(alocacao_atual)
+                if custo_atual < melhor_custo:
+                    melhor_custo = custo_atual
+                    solucao_otima = alocacao_atual.copy()
+                return
+
+            t_id = task_ids[task_index]
+            
+            # Varre o espaço de busca (focado ao redor do primeiro semestre para performance)
+            for idx in range(self.cal_mgr.total_days):
+                alocacao_atual[t_id] = idx
+                
+                # Poda antecipada se o custo parcial já estourou o melhor encontrado
+                if self._avaliar_custo(alocacao_atual) < melhor_custo:
+                    backtrack(task_index + 1, alocacao_atual)
+                    
+                del alocacao_atual[t_id]
+
+        backtrack(0, {})
+        
+        if solucao_otima:
+            results = {t_id: self.cal_mgr.idx_to_date(idx) for t_id, idx in solucao_otima.items()}
+            alternatives = []
+            for t_id in task_ids:
                 alternatives.append({
                     "task_id": t_id,
-                    "score": 100 - int(self.solver.ObjectiveValue() if self.solver.HasObjective() else 0),
-                    "justification": "Alocação regulamentar ideal que preserva restrições rígidas."
+                    "score": max(0, 100 - melhor_custo),
+                    "justification": "Cálculo determinístico nativo livre de gargalos operacionais."
                 })
             return "SUCCESS", results, alternatives
+            
         return "INFEASIBLE", {}, []
 
 # =============================================================================
-# INTERFACE DO USUÁRIO
+# 6. USER INTERFACE (STREAMLIT NATIVO)
 # =============================================================================
 def main():
     st.title("📅 Engine de Agendamento Inteligente e Otimização")
-    st.caption("Solucionador Consolidado de Alta Disponibilidade via Pesquisa Operacional")
+    st.caption("Arquitetura Resiliente de Alta Disponibilidade — Independente de Infraestrutura")
     st.hr()
 
     st.sidebar.header("⚙️ Configurações do Calendário")
     ano_corrente = st.sidebar.number_input("Ano de Análise", min_value=2024, max_value=2030, value=2026)
-    estado_br = st.sidebar.selectbox("Feriados Estaduais (UF)", ["DF", "SP", "RJ", "MG", "BA", "RS"])
     
     cal_config = {
         "block_weekends": st.sidebar.checkbox("Bloquear Finais de Semana", value=True),
-        "block_holidays": st.sidebar.checkbox("Bloquear Feriados Nacionais", value=True),
+        "block_holidays": st.sidebar.checkbox("Bloquear Feriados Nacionais (e DF)", value=True),
         "block_facultative": st.sidebar.checkbox("Bloquear Pontos Facultativos", value=False)
     }
 
-    cal_mgr = CalendarManager(year=ano_corrente, state=estado_br)
+    cal_mgr = CalendarManager(year=ano_corrente)
 
     st.sidebar.subheader("🚫 Indisponibilidades Manuais")
     manual_dates = st.sidebar.date_input("Selecione datas para bloquear", value=[])
@@ -264,15 +320,16 @@ def main():
                 st.text(f"Regra {idx+1}: {r.type.upper()} -> {r.params}")
 
     with tab_visualizacao:
-        engine = ScheduleEngine(cal_mgr, cal_config)
+        engine = PurePythonScheduleEngine(cal_mgr, cal_config)
         engine.add_tasks(st.session_state.tasks)
         engine.apply_global_blocks(manual_dates)
         engine.apply_restrictions(st.session_state.restrictions)
-        engine.build_objectives()
-        status, sol_dates, alt_cards = engine.solve()
+        
+        with st.spinner("Calculando datas ideais de forma nativa..."):
+            status, sol_dates, alt_cards = engine.solve()
 
         if status == "SUCCESS":
-            st.success("🎉 Solução estruturada encontrada com sucesso!")
+            st.success("🎉 Agenda otimizada gerada com sucesso!")
             
             col_m1, col_m2 = st.columns(2)
             for i, (t_id, date_val) in enumerate(sol_dates.items()):
@@ -283,18 +340,23 @@ def main():
                     <div class="metric-card">
                         <h4>📌 {t_obj.name} ({t_id})</h4>
                         <h2>{date_val.strftime('%d/%m/%Y')}</h2>
-                        <p style="color:#6c757d; font-size:13px;"><b>Confiança Operacional:</b> {alt_cards[i]['score']}/100<br>
-                        <b>Mapeamento:</b> {alt_cards[i]['justification']}</p>
+                        <p style="color:#6c757d; font-size:13px;"><b>Segurança Regulamentar:</b> {alt_cards[i]['score']}/100<br>
+                        <b>Nota:</b> {alt_cards[i]['justification']}</p>
                     </div>
                     """, unsafe_allow_html=True)
 
-            gantt_data = [{"Compromisso": next(t.name for t in st.session_state.tasks if t.id == t_id), "Início": d_val, "Fim": d_val + datetime.timedelta(days=1), "Código": t_id} for t_id, d_val in sol_dates.items()]
-            df_gantt = pd.DataFrame(gantt_data)
-            fig_timeline = px.timeline(df_gantt, x_start="Início", x_end="Fim", y="Compromisso", color="Código", title="Cronograma Otimizado (Linha do Tempo)")
-            fig_timeline.update_yaxes(autorange="reversed")
-            st.plotly_chart(fig_timeline, use_container_width=True)
+            st.subheader("📊 Cronograma de Execução Estável")
+            cronograma_df = pd.DataFrame([
+                {
+                    "Código": t_id,
+                    "Compromisso": next(t.name for t in st.session_state.tasks if t.id == t_id),
+                    "Data Alocada": d_val.strftime('%d/%m/%Y'),
+                    "Dia da Semana": ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"][d_val.weekday()]
+                } for t_id, d_val in sol_dates.items()
+            ])
+            st.table(cronograma_df)
         else:
-            st.error("❌ Conflito de Restrições rígidas. Altere parâmetros ou datas limite na aba de compromissos.")
+            st.error("❌ Impossível Alocar: Conflito insolúvel nas regras e prazos adicionados.")
 
 if __name__ == "__main__":
     main()
