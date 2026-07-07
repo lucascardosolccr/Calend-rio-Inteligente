@@ -1,44 +1,21 @@
-import sys
-import os
-import subprocess
 import datetime
 from typing import List, Dict, Any, Tuple
-
-# =============================================================================
-# 1. BLINDAGEM AUTOMÁTICA DE AMBIENTE (ÚNICO ARQUIVO)
-# =============================================================================
-def auto_reparar_ambiente():
-    """Garante a instalação dos pacotes necessários direto no escopo do usuário."""
-    # Adiciona caminhos locais ao PATH para garantir visibilidade no Streamlit Cloud
-    user_site = os.path.expanduser('~/.local/lib/python' + '.'.join(sys.version.split('.')[:2]) + '/site-packages')
-    if user_site not in sys.path:
-        sys.path.insert(0, user_site)
-        
-    pacotes = {"plotly": "plotly>=5.15.0", "holidays": "holidays>=0.40", "ortools": "ortools>=9.8.0"}
-    
-    for modulo, comando_pip in pacotes.items():
-        try:
-            __import__(modulo)
-        except ImportError:
-            # Instalação silenciosa em tempo de execução usando privilégios permitidos (--user)
-            subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--user", "--quiet", comando_pip],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-
-# Executa o mecanismo protetor antes de carregar as bibliotecas pesadas
-auto_reparar_ambiente()
-
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import holidays
-from ortools.sat.python import cp_model
 
 # =============================================================================
-# 2. CONFIGURAÇÃO DA INTERFACE & ESTILOS CSS
+# VERIFICAÇÃO DE DEPENDÊNCIAS CRÍTICAS (SEM SUBPROCESS)
 # =============================================================================
+try:
+    import plotly.express as px
+    import holidays
+    from ortools.sat.python import cp_model
+    AMBIENTE_OK = True
+except ImportError as e:
+    AMBIENTE_OK = False
+    MODULO_FALTANTE = str(e).split("'")[-2] if "'" in str(e) else str(e)
+
+# Configuração inicial da página
 st.set_page_config(
     page_title="Scheduler Engine PRO",
     page_icon="📅",
@@ -46,6 +23,29 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Se o ambiente não estiver pronto, mostra tela de instrução amigável e para a execução
+if not AMBIENTE_OK:
+    st.error(f"### 🚨 Erro de Infraestrutura no Streamlit Cloud")
+    st.markdown(f"""
+    O servidor do Streamlit não instalou a biblioteca **`{MODULO_FALTANTE}`**.
+    
+    #### **Como corrigir isso definitivamente no seu GitHub:**
+    1. Vá na raiz do seu repositório no GitHub (onde está este arquivo `streamlit_app.py`).
+    2. Certifique-se de que existe um arquivo chamado exatamente **`requirements.txt`** (tudo em letras minúsculas).
+    3. O conteúdo desse arquivo deve ser estritamente:
+    ```text
+    plotly>=5.15.0
+    holidays>=0.40
+    ortools>=9.8.0
+    pandas>=2.0.0
+    ```
+    4. Depois de salvar o arquivo no GitHub, você **precisa** deletar o app no painel do Streamlit Cloud e criá-lo novamente para limpar o cache corrompido do servidor.
+    """)
+    st.stop()
+
+# =============================================================================
+# ESTILIZAÇÃO CSS
+# =============================================================================
 st.markdown("""
     <style>
     .metric-card {
@@ -60,7 +60,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =============================================================================
-# 3. CLASSES DE DOMÍNIO (MODELOS DE DADOS)
+# MODELOS DE DADOS & CLASSES
 # =============================================================================
 class Task:
     def __init__(self, id: str, name: str):
@@ -72,9 +72,6 @@ class Restriction:
         self.type = type
         self.params = params
 
-# =============================================================================
-# 4. GERENCIADOR DE CALENDÁRIO & FERIADOS (DF / BRASIL)
-# =============================================================================
 class CalendarManager:
     def __init__(self, year: int, state: str = "DF"):
         self.year = year
@@ -113,9 +110,6 @@ class CalendarManager:
             "weekday": current_date.weekday()
         }
 
-# =============================================================================
-# 5. MOTOR DE RESOLUÇÃO MATEMÁTICA (OR-TOOLS)
-# =============================================================================
 class ScheduleEngine:
     def __init__(self, cal_mgr: CalendarManager, cal_config: Dict[str, bool]):
         self.cal_mgr = cal_mgr
@@ -190,11 +184,11 @@ class ScheduleEngine:
         return "INFEASIBLE", {}, []
 
 # =============================================================================
-# 6. ENTRADA DA INTERFACE GRÁFICA (MAIN)
+# INTERFACE DO USUÁRIO
 # =============================================================================
 def main():
     st.title("📅 Engine de Agendamento Inteligente e Otimização")
-    st.caption("Solucionador Consolidado de Alta Disponibilidade")
+    st.caption("Solucionador Consolidado de Alta Disponibilidade via Pesquisa Operacional")
     st.hr()
 
     st.sidebar.header("⚙️ Configurações do Calendário")
