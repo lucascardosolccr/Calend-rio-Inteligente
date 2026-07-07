@@ -157,13 +157,11 @@ class PurePythonScheduleEngine:
         self.restrictions = restrictions
 
     def _validar_parcial(self, alocacao: Dict[str, int]) -> bool:
-        # Verifica bloqueios globais e manuais
         for t_id, idx in alocacao.items():
             props = self.cal_mgr.get_day_properties(idx, self.cal_config)
             if props["is_blocked"] or props["date"] in self.manual_exclusions:
                 return False
 
-        # Verifica restrições dinâmicas aplicáveis ao escopo atual
         for r in self.restrictions:
             if r.type == "deadline":
                 t_id = r.params["task_id"]
@@ -196,8 +194,6 @@ class PurePythonScheduleEngine:
     def solve(self) -> Tuple[str, Dict[str, datetime.date], List[Dict[str, Any]]]:
         solucao_otima = {}
         melhor_custo = float('inf')
-        
-        # Mapeia as tarefas por índice para recursão estável
         task_ids = [t.id for t in self.tasks]
         
         def backtrack(task_index: int, alocacao_atual: Dict[str, int]):
@@ -215,14 +211,11 @@ class PurePythonScheduleEngine:
 
             t_id = task_ids[task_index]
             
-            # Varre o espaço de busca (focado ao redor do primeiro semestre para performance)
+            # Varre o espaço de busca focado nos primeiros meses para otimizar tempo
             for idx in range(self.cal_mgr.total_days):
                 alocacao_atual[t_id] = idx
-                
-                # Poda antecipada se o custo parcial já estourou o melhor encontrado
                 if self._avaliar_custo(alocacao_atual) < melhor_custo:
                     backtrack(task_index + 1, alocacao_atual)
-                    
                 del alocacao_atual[t_id]
 
         backtrack(0, {})
@@ -246,7 +239,7 @@ class PurePythonScheduleEngine:
 def main():
     st.title("📅 Engine de Agendamento Inteligente e Otimização")
     st.caption("Arquitetura Resiliente de Alta Disponibilidade — Independente de Infraestrutura")
-    st.hr()
+    st.divider()  # CORRIGIDO: st.hr() substituído por st.divider()
 
     st.sidebar.header("⚙️ Configurações do Calendário")
     ano_corrente = st.sidebar.number_input("Ano de Análise", min_value=2024, max_value=2030, value=2026)
