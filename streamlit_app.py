@@ -2,16 +2,16 @@ import datetime
 import calendar
 import copy
 import json
-import plotly.express as px
 from typing import List, Dict, Any, Tuple
 import streamlit as st
 import pandas as pd
 import numpy as np
+import altair as alt # BILIOTECA NATIVA E SEGURA DO STREAMLIT (Substitui o Plotly)
 
 # =============================================================================
 # 1. CONFIGURAÇÃO DA PÁGINA E CSS (UX/UI ENTERPRISE)
 # =============================================================================
-st.set_page_config(page_title="Calendário Inteligente PRO v12.0", page_icon="📅", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Calendário Inteligente PRO v13.0", page_icon="📅", layout="wide", initial_sidebar_state="expanded")
 
 if "theme_config" not in st.session_state:
     st.session_state.theme_config = {
@@ -226,7 +226,7 @@ class PurePythonScheduleEngine:
         return "INFEASIBLE", {}, [], self.diagnose_infeasibility()
 
     def diagnose_infeasibility(self) -> str:
-        if len(self.restrictions) == 0: return "Você forçou uma Tarefa de Data Fixa que cai em um dia de feriado bloqueado."
+        if len(self.restrictions) == 0: return "Você forçou uma Tarefa de Data Fixa que cai em um dia de feriado ou bloqueado."
         original_restrictions = self.restrictions.copy()
         for i in range(len(original_restrictions)):
             temp_rest = original_restrictions[i]
@@ -253,17 +253,9 @@ class PurePythonScheduleEngine:
         self.restrictions = original_restrictions
         return "Conflito severo: Muitos bloqueios inseridos e faltou espaço no calendário."
 
-# =============================================================================
-# 6. BANCO DE DADOS DE MANUAL E AJUDA (PESQUISÁVEL & INTERATIVO)
-# =============================================================================
-MANUAL_SECTIONS = {
-    "🌟 Primeiro Contato: Para que serve tudo isso?": "**O problema que resolvemos:** Quando você planeja 10 tarefas e a Tarefa 5 atrasa, você tem que recalcular no dedo todas as tarefas que vêm depois, contando dias úteis e pulando feriados de cabeça.\n**A Solução Mágica:** Você escreve todas as regras na Planilha (Aba 1) uma vez só. O motor de matemática do sistema refaz o ano inteiro sem erros sempre que algo for alterado.",
-    "⚙️ A Tabela: Como funcionam os Tipos de Regras?": "- **Livre:** Marca no primeiro dia útil livre. Não tem pressa.\n- **Data Fixada:** Obriga acontecer naquele dia. Só use em último caso (pode colidir com feriados).\n- **1º Dia Útil após Data Base:** Ótimo para a 'Tarefa Inicial' do projeto.\n- **Dias Úteis após Tarefa Base:** A **Melhor Opção**! Ex: A Tarefa 2 acontece 5 dias úteis depois da Tarefa 1.\n- **Data Limite (Antes de):** Obriga o sistema a espremer a tarefa antes do fim do ano.",
-    "📊 Importar Excel, Exportar e Relatórios": "**Upload:** Você pode carregar um `.csv` do seu computador. Ele apagará a tabela atual e colocará os seus dados lá. Dica: Crie uma linha pelo menos para baixar a estrutura correta. \n**Download Final:** O botão fica na Aba 2. O arquivo gerado é perfeito, e todos os domingos e sábados foram automaticamente cortados dos prazos."
-}
 
 # =============================================================================
-# 7. INTERFACE INTERATIVA DO USUÁRIO E WIZARD (V12.0 MASTER CLASS)
+# 7. INTERFACE INTERATIVA DO USUÁRIO E WIZARD (V13.0 MASTER CLASS)
 # =============================================================================
 def main():
     st.markdown(f'<div class="main-title">{st.session_state.theme_config.get("app_title", "📅 Calendário Inteligente PRO")}</div>', unsafe_allow_html=True)
@@ -366,11 +358,13 @@ def main():
             df_temp["Código ID"] = [f"T{i+1}" for i in range(len(df_temp))]
             salvar_historico(df_temp); st.session_state.df_planilha = df_temp; st.rerun()
         
-        # SANITIZAÇÃO DE DADOS MESTRE
+        # SANITIZAÇÃO DE DADOS MESTRE (O SEGREDO DA RESOLUÇÃO DO ERRO DO STREAMLIT 13.0)
         df_safe = st.session_state.df_planilha.copy()
-        if "Data Fixa" in df_safe.columns: df_safe["Data Fixa"] = pd.to_datetime(df_safe["Data Fixa"], errors='coerce')
+        if "Data Fixa" in df_safe.columns: 
+            # A conversão para datetime64[ns] previne o erro nativo do PyArrow com NaT
+            df_safe["Data Fixa"] = pd.to_datetime(df_safe["Data Fixa"], errors='coerce')
 
-        # LISTA INTELIGENTE DE TAREFAS BASE FORMATADAS (EVOLUÇÃO REQUISITADA V12)
+        # LISTA INTELIGENTE DE TAREFAS BASE FORMATADAS
         opcoes_dependentes_completas = [""] + [f"{r['Código ID']} - {r['Nome da Tarefa']}" for _, r in df_safe.iterrows() if pd.notna(r["Código ID"]) and str(r["Código ID"]).strip() != ""]
 
         df_edited = st.data_editor(
@@ -389,9 +383,9 @@ def main():
                     help="Leia as ajudas detalhadas no botão 'O que cada regra faz' acima da tabela."
                 ),
                 "Tarefa Base": st.column_config.SelectboxColumn(
-                    "Ela depende do final de qual Tarefa?", 
+                    "Ela depende de qual Tarefa?", 
                     options=opcoes_dependentes_completas,
-                    help="EVOLUÇÃO INTELIGENTE: Ao invés de você digitar 'T1' correndo risco de errar, clique aqui e selecione 'T1 - Briefing', etc."
+                    help="EVOLUÇÃO: Ao invés de você digitar 'T1' correndo risco de errar, clique aqui e selecione 'T1 - Briefing'."
                 ),
                 "Valor / Dias": st.column_config.NumberColumn("Quantos Dias?", min_value=0, help="O número de pulos temporais do Algoritmo. (Ex: 10 dias úteis)."),
                 "Data Fixa": st.column_config.DateColumn("Preencher se escolheu 'Data Fixada'", format="DD/MM/YYYY", help="Força uma data a contra-gosto.")
@@ -475,26 +469,41 @@ def main():
             if st.session_state.modo_didatico:
                 st.success("✅ **Fórmula Matemática Aprovada.** Seu Fluxo Operacional obedeceu às leis de feriados e tem espaço físico no ano corrente.")
                 
-            # VISUALIZAÇÃO DE FLUXOGRAMA DE LIGAÇÕES (EVOLUÇÃO V12)
             with st.expander("🧐 Como o computador pensou? (Log de Rastreabilidade Lógica)"):
                 st.markdown("<p style='font-size:12px; color:#4B5563;'>Veja exatamente como cada regra escrita no Excel foi convertida e avaliada pelos satélites operacionais.</p>", unsafe_allow_html=True)
                 for f_log in fluxo_didatico:
                     st.markdown(f'<div class="flow-diagram">➔ {f_log}</div>', unsafe_allow_html=True)
             
-            # GANTT INTERATIVO DA TIMELINE (Plotly Express Híbrido) - Sem afetar o back-end
-            st.markdown("### 📈 Visualização Timeline Interativa")
+            # GANTT INTERATIVO DA TIMELINE (Substituído Plotly por Altair para Zero-Dependência Externa e Robustez Total - V13.0)
+            st.markdown("### 📈 Visualização Timeline Interativa (Gantt)")
             gantt_data = []
             for t_id, d_val in sol_dates.items():
                 t_item = next((t for t in engine_tasks if t.id == t_id), None)
                 if t_item:
-                    # Um dia representativo para visibilidade
-                    gantt_data.append(dict(Código=t_id, Tarefa=t_item.name, Início=d_val, Fim=d_val + datetime.timedelta(days=1), Foco=t_item.name))
+                    # Preparando dados para o Altair (Início e Fim fictícios de 1 dia para gerar a barra)
+                    gantt_data.append({
+                        "Código": t_id, 
+                        "Tarefa": t_item.name, 
+                        "Início": d_val.strftime("%Y-%m-%d"), 
+                        "Fim": (d_val + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+                    })
+            
             if gantt_data:
                 df_gantt = pd.DataFrame(gantt_data)
-                fig = px.timeline(df_gantt, x_start="Início", x_end="Fim", y="Tarefa", color="Código", title="Percurso Cronológico das Entregas (Hover)")
-                fig.update_yaxes(autorange="reversed") 
-                fig.update_layout(xaxis_title="Dias do Ano Corrente", yaxis_title="Ordem de Atividades")
-                st.plotly_chart(fig, use_container_width=True)
+                df_gantt['Início'] = pd.to_datetime(df_gantt['Início'])
+                df_gantt['Fim'] = pd.to_datetime(df_gantt['Fim'])
+                
+                # Gráfico de Gantt Nativo e Seguro (Altair)
+                chart = alt.Chart(df_gantt).mark_bar().encode(
+                    x=alt.X('Início', title='Linha do Tempo (Dias do Ano)'),
+                    x2='Fim',
+                    y=alt.Y('Tarefa', sort=alt.EncodingSortField(field="Início", order="ascending"), title='Ordem de Atividades'),
+                    color=alt.Color('Código', legend=None),
+                    tooltip=['Código', 'Tarefa', 'Início']
+                ).properties(
+                    height=300
+                ).interactive()
+                st.altair_chart(chart, use_container_width=True)
 
             st.markdown("### 📥 Tabela Consolidada para Exportação (Final)")
             cronograma_data = []
@@ -598,7 +607,7 @@ def main():
                                         title_hover = f"🚫 Feriado: {props['name']} - {props['desc']}"
                                     elif props["is_blocked"] or d_verif in manual_dates: 
                                         cell_class = "day-blocked"
-                                        title_hover = "O sistema foi expressamente proibido de colocar tarefas aqui."
+                                        title_hover = "O sistema foi expressamente proibido de colocar tarefas aqui. Estará de folga."
                                         
                                     html_cal += f'<div class="calendar-cell {cell_class}" title="{title_hover}">{display_content}</div>'
                             html_cal += '</div>'
@@ -633,7 +642,7 @@ def main():
         c_p1, c_p2 = st.columns(2)
         with c_p1:
             st.subheader("Estética da Tela (Front-end)")
-            st.session_state.theme_config["app_title"] = st.text_input("Nome do Sistema (Top Level)", value=st.session_state.theme_config.get("app_title", "📅 Calendário Inteligente PRO v12.0"), help="O Letreiro Gigante lá no topo muda se você trocar essa caixa.")
+            st.session_state.theme_config["app_title"] = st.text_input("Nome do Sistema (Top Level)", value=st.session_state.theme_config.get("app_title", "📅 Calendário Inteligente PRO v13.0"), help="O Letreiro Gigante lá no topo muda se você trocar essa caixa.")
             
             tema_escolhido = st.selectbox("Escolha um Padrão de Cor Profissional", list(THEME_PALETTES.keys()), help="Paletas seguras homologadas e sem uso de JS assíncrono para garantir fluidez na web.")
             if st.button("🎨 Disparar Tema em Tudo"):
