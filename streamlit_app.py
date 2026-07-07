@@ -8,7 +8,7 @@ import pandas as pd
 # 1. CONFIGURAÇÃO DA PÁGINA & CONSTANTES VISUAIS (UI/UX BRANDING)
 # =============================================================================
 st.set_page_config(
-    page_title="Scheduler Engine PRO v5",
+    page_title="Scheduler Engine PRO v5.1",
     page_icon="📅",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -34,6 +34,13 @@ st.markdown("""
         padding: 15px;
         border-radius: 8px;
         box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+        margin-bottom: 15px;
+    }
+    .manual-box {
+        background-color: #EFF6FF;
+        border: 1px solid #BFDBFE;
+        padding: 15px;
+        border-radius: 8px;
         margin-bottom: 15px;
     }
     .calendar-grid {
@@ -62,7 +69,20 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =============================================================================
-# 2. MOTOR DE FERIADOS FLEXÍVEL (GAUSS + REGIONAIS DINÂMICOS)
+# 2. MODELOS DE DADOS HISTÓRICOS E ESTRUTURAS
+# =============================================================================
+class Task:
+    def __init__(self, id: str, name: str):
+        self.id = id
+        self.name = name
+
+class Restriction:
+    def __init__(self, type: str, params: Dict[str, Any]):
+        self.type = type
+        self.params = params
+
+# =============================================================================
+# 3. MOTOR DE FERIADOS FLEXÍVEL (GAUSS + REGIONAIS DINÂMICOS)
 # =============================================================================
 class BrazilHolidaysPure:
     def __init__(self, year: int, custom_holidays: Dict[datetime.date, str] = None):
@@ -115,7 +135,7 @@ class BrazilHolidaysPure:
         return self.holidays_dict.get(d, default)
 
 # =============================================================================
-# 3. GERENCIADOR DO CALENDÁRIO OPERACIONAL
+# 4. GERENCIADOR DO CALENDÁRIO OPERACIONAL
 # =============================================================================
 class CalendarManager:
     def __init__(self, year: int, custom_holidays: Dict[datetime.date, str] = None):
@@ -163,20 +183,24 @@ class CalendarManager:
         return dias_uteis
 
 # =============================================================================
-# 4. MOTOR DE OTIMIZAÇÃO POR RESOLUÇÃO RECURSIVA AVANÇADA (V5)
+# 5. MOTOR DE OTIMIZAÇÃO POR RESOLUÇÃO RECURSIVA BLINDADA (V5.1)
 # =============================================================================
 class PurePythonScheduleEngine:
     def __init__(self, cal_mgr: CalendarManager, cal_config: Dict[str, bool]):
         self.cal_mgr = cal_mgr
         self.cal_config = cal_config
-        self.tasks: List[Dict[str, Any]] = []
+        self.tasks: List[Task] = []
+        self.restrictions: List[Restriction] = []
         self.manual_exclusions: List[datetime.date] = []
 
-    def load_matrix(self, tasks_list: List[Dict[str, Any]]):
-        self.tasks = tasks_list
+    def add_tasks(self, tasks: List[Task]):
+        self.tasks = tasks
 
     def apply_global_blocks(self, manual_exclusions: List[datetime.date]):
         self.manual_exclusions = manual_exclusions
+
+    def apply_restrictions(self, restrictions: List[Restriction]):
+        self.restrictions = restrictions
 
     def _validar_parcial(self, alocacao: Dict[str, int]) -> bool:
         for t_id, idx in alocacao.items():
@@ -184,32 +208,36 @@ class PurePythonScheduleEngine:
             if props["is_blocked"] or props["date"] in self.manual_exclusions:
                 return False
 
-        # Avalia as regras extraídas diretamente da tabela do usuário
-        for t in self.tasks:
-            t_id = t["Código ID"]
-            if t_id in alocacao:
-                idx_atual = alocacao[t_id]
-                
-                # Regra 1: Deslocamento por Dias Úteis Vinculados
-                base_id = t.get("Id da Atividade Base")
-                if pd.notna(base_id) and str(base_id).strip() != "" and str(base_id) in alocacao:
-                    idx_base = alocacao[str(base_id)]
-                    offset_esperado = t.get("Dias Úteis de Intervalo")
-                    try:
-                        offset_esperado = int(offset_esperado) if pd.notna(offset_esperado) else 0
-                    except:
-                        offset_esperado = 0
+        for r in self.restrictions:
+            if r.type == "deadline":
+                t_id = r.params["task_id"]
+                if t_id in alocacao:
+                    idx_atual = alocacao[t_id]
+                    if r.params.get("before"):
+                        idx_limite = self.cal_mgr.date_to_idx(r.params["before"])
+                        if idx_atual >= idx_limite: return False
+                    if r.params.get("after"):
+                        idx_limite = self.cal_mgr.date_to_idx(r.params["after"])
+                        if idx_atual <= idx_limite: return False
                         
-                    if offset_esperado > 0:
-                        dias_uteis_reais = self.cal_mgr.contar_dias_uteis_entre(idx_base, idx_atual, self.cal_config, self.manual_exclusions)
-                        if dias_uteis_reais != offset_esperado:
-                            return False
-                            
-                # Regra 2: Deadline Fixo de data Limite (Se houver)
-                deadline_val = t.get("Prazo Limite (AAAA-MM-DD)")
-                if pd.notna(deadline_val) and isinstance(deadline_val, (datetime.date, datetime.datetime)):
-                    idx_limite = self.cal_mgr.date_to_idx(deadline_val if isinstance(deadline_val, datetime.date) else deadline_val.date())
-                    if idx_atual > idx_limite:
+            elif r.type == "dependency":
+                t_a = r.params["task_a"]
+                t_b = r.params["task_b"]
+                if t_a in alocacao and t_b in alocacao:
+                    min_gap = r.params.get("min_gap", 0)
+                    if alocacao[t_b] < alocacao[t_a] + min_gap:
+                        return False
+                        
+            elif r.type == "working_day_offset":
+                t_base = r.params["task_base"]
+                t_target = r.params["task_target"]
+                if t_base in alocacao and t_target in alocacao:
+                    idx_base = alocacao[t_base]
+                    idx_target = alocacao[t_target]
+                    offset_esperado = r.params["offset"]
+                    
+                    dias_uteis_reais = self.cal_mgr.contar_dias_uteis_entre(idx_base, idx_target, self.cal_config, self.manual_exclusions)
+                    if dias_uteis_reais != offset_esperado:
                         return False
         return True
 
@@ -221,15 +249,20 @@ class PurePythonScheduleEngine:
                 custo += 50
         return custo
 
-    def solve(self) -> Tuple[str, Dict[str, datetime.date]]:
+    def solve(self) -> Tuple[str, Dict[str, datetime.date], List[Dict[str, Any]]]:
         solucao_otima = {}
         melhor_custo = float('inf')
-        task_ids = [str(t["Código ID"]) for t in self.tasks if pd.notna(t["Código ID"])]
+        task_ids = [t.id for t in self.tasks]
         
         if not task_ids:
-            return "INFEASIBLE", {}
+            return "SUCCESS", {}, []
 
-        horizonte_busca = min(120, self.cal_mgr.total_days)
+        max_offset_detectado = 60
+        for r in self.restrictions:
+            if r.type == "working_day_offset":
+                max_offset_detectado = max(max_offset_detectado, r.params["offset"] * 2)
+
+        horizonte_busca = min(max_offset_detectado + 60, self.cal_mgr.total_days)
 
         def backtrack(task_index: int, alocacao_atual: Dict[str, int]):
             nonlocal solucao_otima, melhor_custo
@@ -256,40 +289,59 @@ class PurePythonScheduleEngine:
         
         if solucao_otima:
             results = {t_id: self.cal_mgr.idx_to_date(idx) for t_id, idx in solucao_otima.items()}
-            return "SUCCESS", results
-        return "INFEASIBLE", {}
+            alternatives = []
+            for t_id in task_ids:
+                alternatives.append({
+                    "task_id": t_id,
+                    "score": max(0, 100 - melhor_custo),
+                    "justification": "Alocação regulamentar ideal estruturada sob regras estritas."
+                })
+            return "SUCCESS", results, alternatives
+            
+        return "INFEASIBLE", {}, []
 
 # =============================================================================
-# 5. INTERFACE INTERATIVA DO USUÁRIO (STREAMLIT UX DESIGN)
+# 6. INTERFACE INTERATIVA DO USUÁRIO (STREAMLIT UX DESIGN MASTER)
 # =============================================================================
 def main():
-    st.markdown('<div class="main-title">📅 Engine de Planejamento Operacional Inteligente</div>', unsafe_allow_html=True)
-    st.markdown('<div class="subtitle">Planilha Dinâmica Interativa com Cálculo Automático de Dias Úteis e Prazos Regulares</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">📅 Engine de Planejamento Operacional Master</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subtitle">Fusão Completa: Upload de Planilhas, Edição Direta em Células e Motor de Restrições Tradicional Integrado</div>', unsafe_allow_html=True)
     
     if "custom_holidays" not in st.session_state:
         st.session_state.custom_holidays = {}
 
-    # Configurações na Barra Lateral
-    st.sidebar.header("⚙️ Painel de Controle")
-    ano_corrente = st.sidebar.number_input("Ano de Exercício", min_value=2024, max_value=2030, value=2026)
+    # Estado das tarefas e restrições históricas mantidas para evitar perdas
+    if "tasks" not in st.session_state:
+        st.session_state.tasks = [
+            Task(id="T1", name="Homologação e Abertura do Processo"),
+            Task(id="T2", name="Análise de Metas e Dashboard CILAES")
+        ]
+    if "restrictions" not in st.session_state:
+        st.session_state.restrictions = [
+            Restriction(type="working_day_offset", params={"task_base": "T1", "task_target": "T2", "offset": 10})
+        ]
+
+    # Barra Lateral
+    st.sidebar.header("⚙️ Configurações Centrais")
+    ano_corrente = st.sidebar.number_input("Ano do Exercício", min_value=2024, max_value=2030, value=2026)
     
     cal_config = {
         "block_weekends": st.sidebar.checkbox("Bloquear Sábados e Domingos", value=True),
-        "block_holidays": st.sidebar.checkbox("Bloquear Feriados Civis/DF", value=True)
+        "block_holidays": st.sidebar.checkbox("Bloquear Feriados Ativos", value=True)
     }
 
-    st.sidebar.subheader("🏛️ Adicionar Feriado Estadual/Regional")
+    st.sidebar.subheader("🏛️ Cadastrar Feriado Regional")
     with st.sidebar.container():
         f_name = st.text_input("Nome do Feriado", placeholder="Ex: Feriado Distrital")
-        f_date = st.date_input("Data do Feriado", datetime.date(ano_corrente, 11, 30))
-        if st.sidebar.button("➕ Injetar Feriado", use_container_width=True):
+        f_date = st.date_input("Data do Evento", datetime.date(ano_corrente, 11, 30))
+        if st.sidebar.button("➕ Injetar Feriado Regional", use_container_width=True):
             if f_name:
                 st.session_state.custom_holidays[f_date] = f_name
-                st.sidebar.success(f"'{f_name}' salvo!")
+                st.sidebar.success(f"'{f_name}' registrado!")
                 st.rerun()
 
-    st.sidebar.subheader("🚫 Bloqueios Manuais do Usuário")
-    manual_dates = st.sidebar.date_input("Marcar indisponibilidade avulsa", value=[])
+    st.sidebar.subheader("🚫 Indisponibilidades Manuais")
+    manual_dates = st.sidebar.date_input("Adicionar datas avulsas bloqueadas", value=[])
     if isinstance(manual_dates, datetime.date):
         manual_dates = [manual_dates]
     elif isinstance(manual_dates, tuple):
@@ -297,121 +349,174 @@ def main():
 
     cal_mgr = CalendarManager(year=ano_corrente, custom_holidays=st.session_state.custom_holidays)
 
-    # -------------------------------------------------------------------------
-    # ABAS DA APLICAÇÃO
-    # -------------------------------------------------------------------------
-    tab_planilha, tab_analise, tab_calendario_visual = st.tabs([
-        "📊 1. Upload & Edição da Planilha", 
-        "🚀 2. Processamento & Cronograma Gerado", 
-        "📅 3. Visão Anual do Calendário"
+    # Criação das Abas Combinadas
+    tab_compromissos, tab_visualizacao, tab_calendario_visual = st.tabs([
+        "📋 1. Escopo, Upload & Planilha Editável", 
+        "📊 2. Painel Analítico & Resultados", 
+        "📅 3. Calendário Visual Anual"
     ])
 
-    with tab_planilha:
-        st.subheader("📁 Carregamento da Matriz de Atividades")
-        st.markdown("""
-        Suba uma planilha contendo a estrutura de cronograma ou utilize a **matriz padrão editável** abaixo. 
-        Você pode alterar valores, adicionar linhas e configurar dependências diretamente nas células!
-        """)
+    with tab_compromissos:
+        # Seção de Upload Inteligente Nova
+        st.subheader("📁 Central de Upload de Planilhas de Escopo")
+        uploaded_file = st.file_uploader("Suba seu arquivo (.csv, .xlsx) para popular ou mesclar o escopo:", type=["csv", "xlsx"])
         
-        uploaded_file = st.file_uploader("Arraste ou selecione seu arquivo (.csv, .xlsx)", type=["csv", "xlsx"])
-        
-        # Define os dados padrão se não houver arquivo carregado
         if uploaded_file is not None:
             try:
                 if uploaded_file.name.endswith('.csv'):
-                    df_base = pd.read_csv(uploaded_file)
+                    df_up = pd.read_csv(uploaded_file)
                 else:
-                    df_base = pd.read_excel(uploaded_file)
-                st.toast("Tabela acoplada com sucesso!")
+                    df_up = pd.read_excel(uploaded_file)
+                
+                # Injeta os dados carregados de forma compatível
+                for _, row in df_up.iterrows():
+                    r_id = str(row.get("Código ID", f"T{len(st.session_state.tasks)+1}"))
+                    r_name = str(row.get("Descrição do Compromisso", "Tarefa Injetada"))
+                    if not any(t.id == r_id for t in st.session_state.tasks):
+                        st.session_state.tasks.append(Task(id=r_id, name=r_name))
+                st.success("Dados da planilha importados e mesclados!")
             except Exception as e:
-                st.error(f"Erro ao ler o arquivo: {e}. Carregando modelo padrão.")
-                uploaded_file = None
+                st.error(f"Erro ao ler arquivo: {e}")
 
-        if uploaded_file is None:
-            # Planilha Estrutural Modelo Base
-            data_default = {
-                "Código ID": ["T1", "T2", "T3"],
-                "Descrição do Compromisso": ["Abertura do Processo de Auditoria", "Análise de Riscos e Relatório Inicial", "Homologação e Entrega dos Resultados"],
-                "Id da Atividade Base": ["", "T1", "T2"],
-                "Dias Úteis de Intervalo": [0, 15, 10],
-                "Prazo Limite (AAAA-MM-DD)": [None, None, datetime.date(ano_corrente, 12, 15)]
-            }
-            df_base = pd.DataFrame(data_default)
-
-        st.markdown("#### 📝 Modifique os dados na tabela abaixo em tempo real:")
-        # O DATA EDITOR torna a planilha 100% interativa
-        df_edited = st.data_editor(
-            df_base, 
-            use_container_width=True, 
-            num_rows="dynamic",
-            column_config={
-                "Código ID": st.column_config.TextColumn("Código ID", help="Identificador único (Ex: T1, T2)", required=True),
-                "Dias Úteis de Intervalo": st.column_config.NumberColumn("Dias Úteis de Intervalo", min_value=0, max_value=90, step=1),
-                "Prazo Limite (AAAA-MM-DD)": st.column_config.DateColumn("Prazo Limite", format="DD/MM/YYYY")
-            }
-        )
+        st.markdown("---")
         
-        # Converte a planilha editada em lista de dicionários para a Engine de cálculo
-        tasks_matrix = df_edited.to_dict(orient="records")
+        col_tasks, col_rest = st.columns([1, 1], gap="large")
+        
+        with col_tasks:
+            st.subheader("📌 Cadastro Manual e Grade Interativa")
+            with st.expander("➕ Formulário de Entrada Manual Rápida"):
+                new_id = st.text_input("Código de Identificação (Único)", value=f"T{len(st.session_state.tasks)+1}")
+                new_name = st.text_input("Nome Descritivo do Compromisso", placeholder="Ex: Auditoria Interna")
+                if st.button("✨ Adicionar Atividade", use_container_width=True):
+                    if new_name and not any(t.id == new_id for t in st.session_state.tasks):
+                        st.session_state.tasks.append(Task(id=new_id, name=new_name))
+                        st.toast(f"Compromisso {new_id} acoplado!")
+                        st.rerun()
+            
+            # EXIBIÇÃO EM FORMA DE PLANILHA TOTALMENTE EDITÁVEL (ST.DATA_EDITOR)
+            st.markdown("**Planilha de Atividades Interativa (Edite diretamente nas células):**")
+            df_tasks_format = pd.DataFrame([{"Código ID": t.id, "Descrição do Compromisso": t.name} for t in st.session_state.tasks])
+            df_edited = st.data_editor(df_tasks_format, use_container_width=True, num_rows="dynamic")
+            
+            # Sincroniza as edições feitas na planilha de volta para o estado da aplicação
+            updated_tasks = []
+            for _, row in df_edited.iterrows():
+                if pd.notna(row["Código ID"]) and str(row["Código ID"]).strip() != "":
+                    updated_tasks.append(Task(id=str(row["Código ID"]), name=str(row["Descrição do Compromisso"])))
+            st.session_state.tasks = updated_tasks
 
-    # EXECUÇÃO DO MOTOR MATEMÁTICO COM BASE NA PLANILHA EDITADA
+        with col_rest:
+            st.subheader("⛓️ Restrições Logísticas Avançadas")
+            rest_type = st.selectbox("Selecione o Modelo de Regra", [
+                "Deslocamento por Dias Úteis Exatos", 
+                "Prazo Limite (Deadline)", 
+                "Dependência Sequencial Simples"
+            ])
+            
+            if rest_type == "Deslocamento por Dias Úteis Exatos":
+                st.caption("Garante que uma tarefa ocorra exatamente X dias úteis após outra tarefa base.")
+                t_base = st.selectbox("Selecione a Atividade Base", [t.id for t in st.session_state.tasks], key="base_off")
+                t_target = st.selectbox("Selecione a Atividade Destino", [t.id for t in st.session_state.tasks], key="target_off")
+                num_dias_uteis = st.number_input("Número de Dias Úteis de Intervalo", min_value=1, max_value=60, value=10)
+                
+                if st.button("Vincular Regra de Dias Úteis", use_container_width=True):
+                    if t_base != t_target:
+                        st.session_state.restrictions.append(Restriction(
+                            type="working_day_offset", 
+                            params={"task_base": t_base, "task_target": t_target, "offset": num_dias_uteis}
+                        ))
+                        st.toast("Regra de Dias Úteis amarrada com sucesso!")
+                        st.rerun()
+                    else:
+                        st.error("A atividade de destino não pode ser igual à base.")
+
+            elif rest_type == "Prazo Limite (Deadline)":
+                t_id = st.selectbox("Escolha o Alvo", [t.id for t in st.session_state.tasks])
+                choice = st.radio("Critério", ["Deve ocorrer APÓS", "Deve ocorrer ANTES"])
+                d_val = st.date_input("Data de Referência", datetime.date(ano_corrente, 1, 10))
+                if st.button("Vincular Prazo", use_container_width=True):
+                    param_key = "after" if "APÓS" in choice else "before"
+                    st.session_state.restrictions.append(Restriction(type="deadline", params={"task_id": t_id, param_key: d_val}))
+                    st.rerun()
+                    
+            elif rest_type == "Dependência Sequencial Simples":
+                t_a = st.selectbox("Antecessora (A)", [t.id for t in st.session_state.tasks], key="dep_a")
+                t_b = st.selectbox("Sucessora (B)", [t.id for t in st.session_state.tasks], key="dep_b")
+                min_g = st.number_input("Intervalo Mínimo Corrido (Dias)", min_value=0, value=2)
+                if st.button("Vincular Cadeia Sequencial", use_container_width=True):
+                    if t_a != t_b:
+                        st.session_state.restrictions.append(Restriction(type="dependency", params={"task_a": t_a, "task_b": t_b, "min_gap": min_g}))
+                        st.rerun()
+
+            st.markdown("---")
+            st.markdown("**Regras de Amarração Ativas:**")
+            for idx, r in enumerate(st.session_state.restrictions):
+                st.caption(f"• **Regra {idx+1}:** {r.type.upper()} ➔ {r.params}")
+                
+            if st.button("🗑️ Limpar Todas as Restrições", use_container_width=True):
+                st.session_state.restrictions = []
+                st.rerun()
+
+    # EXECUÇÃO DO MOTOR MATEMÁTICO TRADICIONAL PRESERVADO
     engine = PurePythonScheduleEngine(cal_mgr, cal_config)
-    engine.load_matrix(tasks_matrix)
+    engine.add_tasks(st.session_state.tasks)
     engine.apply_global_blocks(manual_dates)
-    status, sol_dates = engine.solve()
+    engine.apply_restrictions(st.session_state.restrictions)
+    status, sol_dates, alt_cards = engine.solve()
 
-    with tab_analise:
-        st.subheader("🏁 Resultados Estruturados pelo Motor")
-        
+    with tab_visualizacao:
         if status == "SUCCESS":
-            st.success("🎯 Solução ideal encontrada! Todas as amarrações da planilha foram respeitadas e os finais de semana/feriados foram pulados com sucesso.")
+            st.success("🎯 Agenda estruturada com sucesso! Todas as condicionais e prazos foram resolvidos.")
             
             col_m1, col_m2 = st.columns(2)
             for i, (t_id, date_val) in enumerate(sol_dates.items()):
                 target_col = col_m1 if i % 2 == 0 else col_m2
-                # Procura a descrição da tarefa na lista editada
-                desc_task = next((t["Descrição do Compromisso"] for t in tasks_matrix if str(t["Código ID"]) == t_id), "Compromisso")
-                with target_col:
-                    st.markdown(f"""
-                    <div class="metric-card">
-                        <span style="color:#2563EB; font-weight:bold; font-size:11px;">CÓDIGO DA LINHA: {t_id}</span>
-                        <h4 style="margin:2px 0;">📌 {desc_task}</h4>
-                        <h2 style="color:#1E3A8A; margin:5px 0;">{date_val.strftime('%d/%m/%Y')}</h2>
-                        <span style="font-size:11px; color:#6B7280;">Dia da semana: {["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"][date_val.weekday()]}</span>
-                    </div>
-                    """, unsafe_allow_html=True)
+                t_obj = next((t for t in st.session_state.tasks if t.id == t_id), None)
+                if t_obj:
+                    with target_col:
+                        st.markdown(f"""
+                        <div class="metric-card">
+                            <span style="color:#2563EB; font-weight:bold; font-size:11px;">CÓDIGO: {t_id}</span>
+                            <h4 style="margin:2px 0;">📌 {t_obj.name}</h4>
+                            <h2 style="color:#1E3A8A; margin:5px 0;">{date_val.strftime('%d/%m/%Y')}</h2>
+                            <span style="font-size:11px; color:#6B7280;">Dia da semana: {["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"][date_val.weekday()]}</span>
+                        </div>
+                        """, unsafe_allow_html=True)
 
-            st.markdown("### 📊 Tabela Geral Consolidadora Resultante")
+            st.markdown("### 📊 Tabela Geral Consolidadora")
             cronograma_data = []
             for t_id, d_val in sol_dates.items():
-                desc = next((t["Descrição do Compromisso"] for t in tasks_matrix if str(t["Código ID"]) == t_id), "")
-                cronograma_data.append({
-                    "Código ID": t_id,
-                    "Descrição do Compromisso": desc,
-                    "Data Calculada": d_val.strftime('%d/%m/%Y'),
-                    "Dia da Semana": ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"][d_val.weekday()],
-                })
-            df_final = pd.DataFrame(cronograma_data)
-            st.dataframe(df_final, use_container_width=True, hide_index=True)
-            
-            csv_buffer = df_final.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Baixar Cronograma Final Atualizado (.CSV)",
-                data=csv_buffer,
-                file_name=f"cronograma_calculado_{ano_corrente}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
+                t_item = next((t for t in st.session_state.tasks if t.id == t_id), None)
+                if t_item:
+                    cronograma_data.append({
+                        "Código ID": t_id,
+                        "Descrição do Compromisso": t_item.name,
+                        "Data Determinada": d_val.strftime('%d/%m/%Y'),
+                        "Dia da Semana": ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"][d_val.weekday()],
+                    })
+                    
+            if cronograma_data:
+                df_final = pd.DataFrame(cronograma_data)
+                st.dataframe(df_final, use_container_width=True, hide_index=True)
+                
+                csv_buffer = df_final.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Baixar Planilha Otimizada (.CSV)",
+                    data=csv_buffer,
+                    file_name=f"cronograma_dias_uteis_{ano_corrente}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
         else:
-            st.error("❌ Conflito de Regras na Planilha. Verifique se você configurou os intervalos de Dias Úteis corretamente ou se alguma data Limite inserida nas células está inviabilizando o fluxo.")
+            st.error("❌ Bloqueio Logístico: Conflito estrutural de regras. O motor determinou ser logicamente impossível alocar os compromissos com os prazos limites ou dias úteis definidos.")
 
     with tab_calendario_visual:
-        st.subheader("📅 Mapa de Ocupação e Disponibilidade")
+        st.subheader("📅 Mapa Analítico de Disponibilidade")
         
         st.markdown("""
         <div style="display: flex; gap: 15px; margin-bottom: 20px; font-size: 13px;">
-            <div><span style="background-color: #F9FAFB; padding: 2px 10px; border: 1px solid #D1D5DB; border-radius:3px;"></span> Dia Livre</div>
-            <div><span style="background-color: #DBEAFE; padding: 2px 10px; border: 1px solid #2563EB; border-radius:3px;"></span> <b>Alocado pela Planilha</b></div>
+            <div><span style="background-color: #F9FAFB; padding: 2px 10px; border: 1px solid #D1D5DB; border-radius:3px;"></span> Dia Útil Livre</div>
+            <div><span style="background-color: #DBEAFE; padding: 2px 10px; border: 1px solid #2563EB; border-radius:3px;"></span> <b>Tarefa Alocada</b></div>
             <div><span style="background-color: #FEE2E2; padding: 2px 10px; border: 1px solid #D1D5DB; border-radius:3px;"></span> Feriado Ativo</div>
             <div><span style="background-color: #E5E7EB; padding: 2px 10px; border: 1px solid #D1D5DB; border-radius:3px;"></span> Bloqueio / Fim de Semana</div>
         </div>
@@ -429,4 +534,38 @@ def main():
                         html_cal = '<div class="calendar-grid"><div class="calendar-row">'
                         for sem in ["D", "S", "T", "Q", "Q", "S", "S"]:
                             html_cal += f'<div class="calendar-cell day-header">{sem}</div>'
-          
+                        html_cal += '</div>'
+                        
+                        cal_obj = calendar.Calendar(firstweekday=6)
+                        weeks = cal_obj.monthdayscalendar(ano_corrente, m_idx)
+                        
+                        for week in weeks:
+                            html_cal += '<div class="calendar-row">'
+                            for day in week:
+                                if day == 0:
+                                    html_cal += '<div class="calendar-cell day-blocked"></div>'
+                                else:
+                                    d_verif = datetime.date(ano_corrente, m_idx, day)
+                                    idx_verif = cal_mgr.date_to_idx(d_verif)
+                                    props = cal_mgr.get_day_properties(idx_verif, cal_config)
+                                    
+                                    cell_class = "day-normal"
+                                    title_hover = props["name"]
+                                    
+                                    if d_verif in sol_dates.values():
+                                        cell_class = "day-allocated"
+                                        t_codes = [t_id for t_id, dt in sol_dates.items() if dt == d_verif]
+                                        title_hover = f"Alocado: {', '.join(t_codes)}"
+                                    elif props["is_holiday"]:
+                                        cell_class = "day-holiday"
+                                    elif props["is_blocked"] or d_verif in manual_dates:
+                                        cell_class = "day-blocked"
+                                        
+                                    html_cal += f'<div class="calendar-cell {cell_class}" title="{title_hover}">{day}</div>'
+                            html_cal += '</div>'
+                        html_cal += '</div>'
+                        st.markdown(html_cal, unsafe_allow_html=True)
+                    m_idx += 1
+
+if __name__ == "__main__":
+    main()
