@@ -1,32 +1,26 @@
-import sys
-import subprocess
 import datetime
 from typing import List, Dict, Any, Tuple
-
-# =============================================================================
-# MECANISMO DE DEFESA CONTRA MODULE-NOT-FOUND (GARANTIA DE EXECUÇÃO NO CLOUD)
-# =============================================================================
-def assegurar_dependencias():
-    pacotes_criticos = {
-        "plotly": "plotly",
-        "holidays": "holidays",
-        "ortools": "ortools"
-    }
-    for modulo, pacote in pacotes_criticos.items():
-        try:
-            __import__(modulo)
-        except ImportError:
-            # Instala silenciosamente em tempo de execução se o Cloud falhar
-            subprocess.check_call([sys.executable, "-m", "pip", "install", pacote])
-
-# Executa a verificação antes de qualquer importação pesada
-assegurar_dependencias()
-
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import holidays
-from ortools.sat.python import cp_model
+
+# Importações com blocos Try/Except amigáveis para diagnosticar se a plataforma instalou
+try:
+    import plotly.express as px
+except ImportError:
+    st.error("🚨 Erro de Ambiente: O pacote 'plotly' não foi instalado pelo Streamlit Cloud. Verifique o arquivo requirements.txt.")
+    st.stop()
+
+try:
+    import holidays
+except ImportError:
+    st.error("🚨 Erro de Ambiente: O pacote 'holidays' não foi instalado. Verifique o seu arquivo de dependências.")
+    st.stop()
+
+try:
+    from ortools.sat.python import cp_model
+except ImportError:
+    st.error("🚨 Erro de Ambiente: O pacote 'ortools' (Google) não foi encontrado no servidor.")
+    st.stop()
 
 # =============================================================================
 # 1. CONFIGURAÇÃO DA PÁGINA & CONSTANTES DE UI
@@ -186,7 +180,7 @@ class ScheduleEngine:
 # =============================================================================
 def main():
     st.title("📅 Engine de Agendamento Inteligente e Otimização")
-    st.caption("Sistema de Alta Resiliência para Alocação de Datas")
+    st.caption("Sistema Avançado para Alocação de Datas via Pesquisa Operacional")
     st.hr()
 
     st.sidebar.header("⚙️ Configurações do Calendário")
