@@ -213,7 +213,6 @@ class PurePythonScheduleEngine:
         melhor_custo = float('inf')
         task_ids = [t.id for t in self.tasks]
         
-        # Redução inteligente da janela de iteração baseada nas restrições existentes para performance rápida
         def backtrack(task_index: int, alocacao_atual: Dict[str, int]):
             nonlocal solucao_otima, melhor_custo
             
@@ -229,7 +228,6 @@ class PurePythonScheduleEngine:
 
             t_id = task_ids[task_index]
             
-            # Varredura do horizonte de tempo (Otimizado para os primeiros meses para evitar lags visuais)
             for idx in range(min(120, self.cal_mgr.total_days)):
                 alocacao_atual[t_id] = idx
                 if self._avaliar_custo(alocacao_atual) < melhor_custo:
@@ -255,13 +253,10 @@ class PurePythonScheduleEngine:
 # 6. INTERFACE INTERATIVA DO USUÁRIO (STREAMLIT UX DESIGN)
 # =============================================================================
 def main():
-    # Cabeçalho Principal Clean & Moderno
     st.markdown('<div class="main-title">📅 Engine de Agendamento Otimizado</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtitle">Planejamento Estratégico Multitarefas Livre de Conflitos e Feriados</div>', unsafe_allow_html=True)
     
-    # -------------------------------------------------------------------------
-    # MANUAL DIDÁTICO E INTUITIVO DE OPERAÇÃO
-    # -------------------------------------------------------------------------
+    # MANUAL DIDÁTICO
     with st.expander("📖 MANUAL DO USUÁRIO: Como dominar o sistema em 3 passos", expanded=False):
         st.markdown("""
         <div class="manual-box">
@@ -283,7 +278,7 @@ def main():
 
     st.divider()
 
-    # Barra Lateral Estilizada
+    # Barra Lateral
     st.sidebar.header("⚙️ Controle de Calendário")
     ano_corrente = st.sidebar.number_input("Ano do Exercício", min_value=2024, max_value=2030, value=2026)
     
@@ -302,7 +297,7 @@ def main():
     elif isinstance(manual_dates, tuple):
         manual_dates = list(manual_dates)
 
-    # Inicialização estável do estado de sessão para dados dinâmicos
+    # Inicialização do estado de sessão
     if "tasks" not in st.session_state:
         st.session_state.tasks = [
             Task(id="T1", name="Reunião de Planejamento Inicial"),
@@ -314,7 +309,6 @@ def main():
             Restriction(type="dependency", params={"task_a": "T1", "task_b": "T2", "min_gap": 3})
         ]
 
-    # Abas Principais de Trabalho
     tab_compromissos, tab_visualizacao = st.tabs(["📋 1. Configurar Escopo & Regras", "📊 2. Painel Analítico & Exportação"])
 
     with tab_compromissos:
@@ -323,7 +317,8 @@ def main():
         with col_tasks:
             st.subheader("📌 Cadastro de Atividades e Compromissos")
             
-            with st.get_container():
+            # CORRIGIDO: de st.get_container() para st.container()
+            with st.container():
                 new_id = st.text_input("Código de Identificação (Único)", value=f"T{len(st.session_state.tasks)+1}")
                 new_name = st.text_input("Nome Descritivo do Compromisso", placeholder="Ex: Homologação do Sistema")
                 if st.button("✨ Adicionar Atividade à Matriz", use_container_width=True):
@@ -343,10 +338,10 @@ def main():
             
             if rest_type == "Prazo Limite (Deadline)":
                 t_id = st.selectbox("Escolha o Alvo", [t.id for t in st.session_state.tasks])
-                choice = st.radio("Critério Cronológico", ["Deve ocorrer obrigatoriamente APÓS", "Deve ocorrer obrigatoriamente ANTES"])
+                choice = st.radio("Critério Cronológico", ["Deve ocorrer obrigatoriamente APÓS", "Deve ocorrer antes"])
                 d_val = st.date_input("Data de Referência Regulamentar", datetime.date(ano_corrente, 1, 20))
                 if st.button("Vincular Prazo Fixo", use_container_width=True):
-                    param_key = "after" if choice == "Deve ocorrer obrigatoriamente APÓS" else "before"
+                    param_key = "after" if "APÓS" in choice else "before"
                     st.session_state.restrictions.append(Restriction(type="deadline", params={"task_id": t_id, param_key: d_val}))
                     st.toast("Restrição de prazo injetada.")
                     st.rerun()
@@ -371,7 +366,6 @@ def main():
     with tab_visualizacao:
         st.subheader("🚀 Resolução e Otimização em Tempo Real")
         
-        # Execução da inteligência algorítmica
         engine = PurePythonScheduleEngine(cal_mgr, cal_config)
         engine.add_tasks(st.session_state.tasks)
         engine.apply_global_blocks(manual_dates)
@@ -382,7 +376,6 @@ def main():
         if status == "SUCCESS":
             st.success("🎯 Solução matemática perfeita encontrada! Todas as restrições foram atendidas.")
             
-            # Exibição de Cartões de Visão Geral Avançada (UX Premium)
             col_m1, col_m2 = st.columns(2)
             for i, (t_id, date_val) in enumerate(sol_dates.items()):
                 target_col = col_m1 if i % 2 == 0 else col_m2
@@ -400,7 +393,6 @@ def main():
                     </div>
                     """, unsafe_allow_html=True)
 
-            # Geração da Tabela Dinâmica Consolidada
             st.markdown("### 📊 Tabela Geral Consolidadora")
             cronograma_data = [
                 {
@@ -412,13 +404,9 @@ def main():
                 } for t_id, d_val in sol_dates.items()
             ]
             df_final = pd.DataFrame(cronograma_data)
-            
-            # Renderização de tabela interativa rica com controle de busca
             st.dataframe(df_final, use_container_width=True, hide_index=True)
             
-            # Recurso de Exportação Direta (UX)
             csv_buffer = df_final.to_csv(index=False).encode('utf-8')
-            
             st.download_button(
                 label="📥 Baixar Cronograma Otimizado (.CSV)",
                 data=csv_buffer,
