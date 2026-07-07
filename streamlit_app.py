@@ -1,6 +1,27 @@
+import sys
+import subprocess
 import datetime
-from typing import List, Dict, Any, Tuple, Optional
-from dataclasses import dataclass
+from typing import List, Dict, Any, Tuple
+
+# =============================================================================
+# MECANISMO DE DEFESA CONTRA MODULE-NOT-FOUND (GARANTIA DE EXECUÇÃO NO CLOUD)
+# =============================================================================
+def assegurar_dependencias():
+    pacotes_criticos = {
+        "plotly": "plotly",
+        "holidays": "holidays",
+        "ortools": "ortools"
+    }
+    for modulo, pacote in pacotes_criticos.items():
+        try:
+            __import__(modulo)
+        except ImportError:
+            # Instala silenciosamente em tempo de execução se o Cloud falhar
+            subprocess.check_call([sys.executable, "-m", "pip", "install", pacote])
+
+# Executa a verificação antes de qualquer importação pesada
+assegurar_dependencias()
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -31,19 +52,17 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =============================================================================
-# 2. MODELOS DE DADOS (DOMAIN LAYER)
+# 2. MODELOS DE DADOS
 # =============================================================================
-@dataclass
 class Task:
-    id: str
-    name: str
-    weight_weekend: int = 10
-    weight_holiday: int = 15
+    def __init__(self, id: str, name: str):
+        self.id = id
+        self.name = name
 
-@dataclass
 class Restriction:
-    type: str  
-    params: Dict[str, Any]
+    def __init__(self, type: str, params: Dict[str, Any]):
+        self.type = type
+        self.params = params
 
 # =============================================================================
 # 3. GERENCIADOR DE CALENDÁRIO
@@ -83,7 +102,6 @@ class CalendarManager:
             "is_holiday": is_holiday,
             "is_blocked": is_blocked,
             "name": self.br_holidays.get(current_date, "Dia Comum"),
-            "month": current_date.month,
             "weekday": current_date.weekday()
         }
 
@@ -114,38 +132,24 @@ class ScheduleEngine:
                 for var in self.task_vars.values():
                     self.model.Add(var != idx)
 
-    def apply_restrictions(self, restrictions: List[Restriction]) -> List[str]:
-        logs = []
+    def apply_restrictions(self, restrictions: List[Restriction]):
         for r in restrictions:
-            try:
-                if r.type == "deadline":
-                    t_id = r.params["task_id"]
-                    if t_id not in self.task_vars: continue
-                    if r.params.get("before"):
-                        idx = self.cal_mgr.date_to_idx(r.params["before"])
-                        self.model.Add(self.task_vars[t_id] < idx)
-                    if r.params.get("after"):
-                        idx = self.cal_mgr.date_to_idx(r.params["after"])
-                        self.model.Add(self.task_vars[t_id] > idx)
-                        
-                elif r.type == "dependency":
-                    t_a = r.params["task_a"]
-                    t_b = r.params["task_b"]
-                    if t_a not in self.task_vars or t_b not in self.task_vars: continue
-                    min_gap = r.params.get("min_gap", 0)
-                    self.model.Add(self.task_vars[t_b] >= self.task_vars[t_a] + min_gap)
-                        
-                elif r.type == "allowed_days":
-                    t_id = r.params["task_id"]
-                    allowed_wd = r.params["weekdays"]
-                    if t_id not in self.task_vars: continue
-                    for idx in range(self.cal_mgr.total_days):
-                        p = self.cal_mgr.get_day_properties(idx, self.cal_config)
-                        if p["weekday"] not in allowed_wd:
-                            self.model.Add(self.task_vars[t_id] != idx)
-            except Exception as e:
-                logs.append(f"Erro na restrição {r.type}: {str(e)}")
-        return logs
+            if r.type == "deadline":
+                t_id = r.params["task_id"]
+                if t_id not in self.task_vars: continue
+                if r.params.get("before"):
+                    idx = self.cal_mgr.date_to_idx(r.params["before"])
+                    self.model.Add(self.task_vars[t_id] < idx)
+                if r.params.get("after"):
+                    idx = self.cal_mgr.date_to_idx(r.params["after"])
+                    self.model.Add(self.task_vars[t_id] > idx)
+                    
+            elif r.type == "dependency":
+                t_a = r.params["task_a"]
+                t_b = r.params["task_b"]
+                if t_a not in self.task_vars or t_b not in self.task_vars: continue
+                min_gap = r.params.get("min_gap", 0)
+                self.model.Add(self.task_vars[t_b] >= self.task_vars[t_a] + min_gap)
 
     def build_objectives(self):
         penalties = []
@@ -172,7 +176,7 @@ class ScheduleEngine:
                 alternatives.append({
                     "task_id": t_id,
                     "score": 100 - int(self.solver.ObjectiveValue() if self.solver.HasObjective() else 0),
-                    "justification": "Respeita o intervalo regulamentar e evita janelas críticas bloqueadas."
+                    "justification": "Respeita as restrições rígidas e evita janelas críticas bloqueadas."
                 })
             return "SUCCESS", results, alternatives
         return "INFEASIBLE", {}, []
@@ -182,7 +186,7 @@ class ScheduleEngine:
 # =============================================================================
 def main():
     st.title("📅 Engine de Agendamento Inteligente e Otimização")
-    st.caption("Solucionador de Restrições Corporativas Avançado")
+    st.caption("Sistema de Alta Resiliência para Alocação de Datas")
     st.hr()
 
     st.sidebar.header("⚙️ Configurações do Calendário")
@@ -276,7 +280,7 @@ def main():
                     <div class="metric-card">
                         <h4>📌 {t_obj.name} ({t_id})</h4>
                         <h2>{date_val.strftime('%d/%m/%Y')}</h2>
-                        <p style="color:#6c757d; font-size:13px;"><b>Score de Confiança:</b> {alt_cards[i]['score']}/100<br>
+                        <p style="color:#6c757d; font-size:13px;"><b>Score:</b> {alt_cards[i]['score']}/100<br>
                         <b>Justificativa:</b> {alt_cards[i]['justification']}</p>
                     </div>
                     """, unsafe_allow_html=True)
